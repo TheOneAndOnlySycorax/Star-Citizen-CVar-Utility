@@ -1093,9 +1093,29 @@ int wmain(int argc, wchar_t* argv[]) {
                 }
 
                 std::wcout << L"[INFO] Launching " << GetFileName(exePath) << L" with arguments..." << std::endl;
+
+
+                std::wcout << L"Setting environment variables (may require elevation)..." << std::endl;
+                if (!RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL 1", true)) { // true = wait for completion
+                    std::wcerr << L"[ERROR] Failed to set system environment variable via setx." << std::endl;
+                    // Attempt to clean up registry entry before exiting if setx failed.
+                    RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
+                    SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr); // Clean up local env var too
+                    return 1; // Exit on failure
+                }
+                // Also set the variable for the current process and its potential children (belt-and-suspenders).
+                if (!SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", L"1")) {
+                    std::wcerr << L"[WARN] Failed to set local environment variable. Error: " << GetLastError() << std::endl;
+                }
+
+
                 // Launch StarCitizen.exe, giving it its own console window.
                 if (!LaunchProcessWithArgs(exePath, gameArgs, piGame, gameBin64Dir, true)) {
                     std::wcerr << L"[ERROR] Failed to launch game executable directly." << std::endl;
+                    std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
+                    RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
+                    RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
+                    SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
                     // Clean up the potentially corrupted login data we just copied.
                     clear_or_delete_file(loginDataPath);
                     return 1; // Exit program on launch failure.
@@ -1141,6 +1161,7 @@ int wmain(int argc, wchar_t* argv[]) {
             if (!LaunchProcessWithArgs(rsiLauncherPath, L"", rsiPi, launcherDir, false)) { // false = no new console/redirect output
                 std::wcerr << L"[ERROR] Failed to launch RSI Launcher executable." << std::endl;
                 // Attempt environment cleanup before exiting
+                std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
                 RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
                 RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
                 SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
@@ -1169,6 +1190,7 @@ int wmain(int argc, wchar_t* argv[]) {
                         std::wcerr << L"[ERROR] RSI Launcher process (PID: " << launcherPid << ") exited unexpectedly before the game was launched." << std::endl;
                         if (hCheckLauncher) CloseHandle(hCheckLauncher);
                         // Attempt environment cleanup before exiting
+                        std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
                         RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
                         RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
                         SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
@@ -1188,6 +1210,7 @@ int wmain(int argc, wchar_t* argv[]) {
                 // Terminate the launcher if it's still running
                 if (launcherPid != 0) TerminateProcessByPid(launcherPid, RSI_LAUNCHER_EXE);
                 // Attempt environment cleanup before exiting
+                std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
                 RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
                 RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
                 SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
@@ -1250,13 +1273,15 @@ int wmain(int argc, wchar_t* argv[]) {
                     if (!launchedDirectly) {
                         if (launcherPid != 0) TerminateProcessByPid(launcherPid, RSI_LAUNCHER_EXE);
                         // Clean up environment variables (run regardless of previous success, safer)
-                        RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
-                        RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-                        SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
+                        
                     }
                     // Close game process handles if we created them during direct launch
                     if (piGame.hProcess) CloseHandle(piGame.hProcess);
                     if (piGame.hThread) CloseHandle(piGame.hThread);
+                    std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
+                    RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
+                    RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
+                    SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
                     return 1; // Exit the program with an error code due to injection failure
                 }
             }
@@ -1270,10 +1295,12 @@ int wmain(int argc, wchar_t* argv[]) {
                 // Clean up launcher path resources if necessary
                 if (!launchedDirectly) {
                     if (launcherPid != 0) TerminateProcessByPid(launcherPid, RSI_LAUNCHER_EXE);
-                    RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
-                    RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-                    SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
+                   
                 }
+                std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
+                RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
+                RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
+                SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
                 return 1; // Exit because game didn't stay running long enough
             }
         }
@@ -1365,12 +1392,20 @@ int wmain(int argc, wchar_t* argv[]) {
                         std::wcerr << L"[ERROR] Failed to create log monitor thread!" << std::endl;
                         // If monitor fails, terminate game if we launched it, then exit program
                         if (piGame.hProcess) TerminateProcessByPid(gamePid, GAME_PROCESS_NAME);
+                        std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
+                        RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
+                        RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
+                        SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
                         return 1;
                     }
                 }
                 else {
                     // Game died just before monitor thread could start
                     std::wcerr << L"[ERROR] Game process exited before log monitor thread could start." << std::endl;
+                    std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
+                    RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
+                    RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
+                    SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
                     if (hMonitorCheck) CloseHandle(hMonitorCheck);
                     // Clean up our direct launch handles if necessary
                     if (piGame.hProcess) CloseHandle(piGame.hProcess);
@@ -1394,6 +1429,10 @@ int wmain(int argc, wchar_t* argv[]) {
                     std::wcerr << L"\n[CRITICAL] Login failure detected in log (Direct Launch Mode)!" << std::endl;
                     std::wcerr << L"             Terminating game and deleting potentially invalid login data." << std::endl;
                     TerminateProcessByPid(gamePid, GAME_PROCESS_NAME); // Force close the game
+                    std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
+                    RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
+                    RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
+                    SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
                     clear_or_delete_file(loginBackupPath);             // Delete the problematic backup
                     clear_or_delete_file(loginDataPath);               // Delete the problematic current data
                     std::wcout << L"[INFO] Restarting process to use RSI Launcher mode in 5 seconds..." << std::endl;
@@ -1437,7 +1476,10 @@ int wmain(int argc, wchar_t* argv[]) {
         // --- Phase 5: Post-Game Exit Cleanup ---
         // This code executes after the main wait loop breaks, meaning the game process has terminated normally.
         std::wcout << L"\n--- Post-Game Cleanup ---" << std::endl;
-
+        std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
+        RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
+        RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
+        SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
         // Delete the current loginData.json file. This ensures that if the backup exists,
         // the next run will use the direct launch path. If backup doesn't exist, this has no effect.
         std::wcout << L"[INFO] Deleting current login data file (if exists): " << loginDataPath << std::endl;
