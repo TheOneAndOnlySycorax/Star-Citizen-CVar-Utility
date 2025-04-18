@@ -22,7 +22,7 @@
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{de36e3e8-1d14-4e09-8226-18fee2599e3e}</ProjectGuid>
-    <RootNamespace>SCDLLTest</RootNamespace>
+    <RootNamespace>SCCVarUtility</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <ProjectName>SC_CVar_Utility</ProjectName>
   </PropertyGroup>

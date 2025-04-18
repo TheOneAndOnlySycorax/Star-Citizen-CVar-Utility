@@ -1,5 +1,5 @@
 /**
- * @file StarCitizenInjector.cpp
+ * @file Injector.cpp
  * @brief Launches Star Citizen either directly (using backed-up login data) or via the RSI Launcher,
  *        injects necessary DLLs immediately upon game start, monitors for login failures in direct mode,
  *        and handles cleanup. Adheres to specific user requirements regarding injection timing and cleanup.
@@ -49,6 +49,8 @@ const wchar_t* DEFAULT_GAME_ARGS =                                  // Default c
 L"-no_login_dialog -envtag PUB --client-login-show-dialog 0 --services-config-enabled 1 "
 L"--system-trace-service-enabled 1 --system-trace-env-id pub-sc-alpha-410-9650658 "
 L"--grpc-client-endpoint-override https://pub-sc-alpha-410-9650658.test1.cloudimperiumgames.com:443";
+
+const wchar_t* EAC_BYPASS_VAR = L"EOS_USE_ANTICHEATCLIENTNULL";
 
 // --- Global State ---
 // Used for inter-thread communication regarding login status.
@@ -917,6 +919,70 @@ bool TerminateProcessByPid(DWORD pid, const std::wstring& processNameHint) {
     return true; // Indicate termination success
 }
 
+
+// --- Environment Variable Management ---
+
+/**
+ * @brief Sets the required environment variable for EAC bypass, both locally and persistently (system-wide).
+ *        Requires elevation for system-wide changes.
+ * @return `true` if setting attempts were initiated successfully, `false` otherwise.
+ */
+bool SetEnvironmentVariables() {
+    std::wcout << L"[INFO] Setting environment variable " << EAC_BYPASS_VAR << L"=1 (requires elevation)..." << std::endl;
+
+    // Set system-wide persistent variable using setx. Waits for completion.
+    std::wstring setxArgs = L"/M ";
+    setxArgs += EAC_BYPASS_VAR;
+    setxArgs += L" 1";
+    if (!RunElevated(L"setx", setxArgs, true)) { // true = wait
+        std::wcerr << L"[ERROR] Failed to set system environment variable via setx." << std::endl;
+        // Attempt immediate cleanup via registry if setx failed, before returning failure
+        RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V " + std::wstring(EAC_BYPASS_VAR), true);
+        SetEnvironmentVariableW(EAC_BYPASS_VAR, nullptr); // Clean up local too
+        return false;
+    }
+
+    // Also set the variable for the current injector process and its direct children.
+    if (!SetEnvironmentVariableW(EAC_BYPASS_VAR, L"1")) {
+        std::wcerr << L"[WARN] Failed to set local environment variable. Error: " << GetLastError() << std::endl;
+        // Don't necessarily fail the whole operation for local failure if system one worked, but log it.
+    }
+
+    std::wcout << L"[INFO] Environment variable setting initiated." << std::endl;
+    return true;
+}
+
+/**
+ * @brief Cleans up the environment variables set for EAC bypass, both locally and persistently.
+ *        Requires elevation for system-level changes.
+ * @param forInjectorExit If true, indicates this is the final cleanup before the injector exits.
+ */
+void CleanupEnvironmentVariables(bool forInjectorExit = false) {
+    if (forInjectorExit) {
+        std::wcout << L"\n--- Final Cleanup ---" << std::endl;
+    }
+    std::wcout << L"[INFO] Cleaning up environment variable " << EAC_BYPASS_VAR << L" (requires elevation)..." << std::endl;
+
+    // Attempt to unset/clear the system variable using setx first. Waits for completion.
+    std::wstring setxArgs = L"/M ";
+    setxArgs += EAC_BYPASS_VAR;
+    setxArgs += L" \"\""; // Set to empty string
+    RunElevated(L"setx", setxArgs, true); // true = wait
+
+    // Follow up with REG delete for robustness, ensuring it's removed from the registry.
+    RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V " + std::wstring(EAC_BYPASS_VAR), true); // true = wait
+
+    // Clean up the variable in the current injector process environment block.
+    SetEnvironmentVariableW(EAC_BYPASS_VAR, nullptr);
+
+    if (forInjectorExit) {
+        std::wcout << L"[INFO] Final environment variable cleanup complete." << std::endl;
+    }
+    else {
+        std::wcout << L"[INFO] Environment variable cleanup performed." << std::endl;
+    }
+}
+
 /**
  * @brief Displays the help message containing program description, usage, and options.
  */
@@ -982,8 +1048,9 @@ void ShowHelp() {
 /**
  * @brief Main function for the Star Citizen Injector/Launcher.
  *        Handles command line arguments, determines launch mode (Direct or Launcher),
- *        launches/detects the game, injects DLLs, optionally monitors the log file,
- *        handles cleanup, and manages restarting the process if login fails in Direct mode.
+ *        sets/cleans environment variables, launches/detects the game, injects DLLs,
+ *        optionally monitors the log file, handles cleanup, and manages restarting
+ *        the process if login fails in Direct mode.
  * @param argc Number of command line arguments.
  * @param argv Array of wide character command line argument strings.
  * @return 0 on successful completion, 1 on critical failure.
@@ -993,15 +1060,16 @@ int wmain(int argc, wchar_t* argv[]) {
     std::wcout << L"=== Star Citizen Injector/Launcher v0.2 by Sycorax ===\n" << std::endl;
 
     // --- Help Option Check ---
-   // Check for -h or --help *before* parsing other arguments or doing work.
+    // Check for -h or --help *before* parsing other arguments or doing work.
     for (int i = 1; i < argc; ++i) {
         if (wcscmp(argv[i], L"-h") == 0 || wcscmp(argv[i], L"--help") == 0) {
             ShowHelp();
             return 0; // Exit cleanly after showing help
         }
     }
-
+    // Display help hint if no help flag was provided
     std::wcout << L"    (Use -h or --help for command line options)\n" << std::endl;
+
     // --- Argument Parsing & Path Setup ---
     // Parse command line arguments using the helper function
     std::map<std::wstring, std::wstring> args = parse_args(argc, argv);
@@ -1021,7 +1089,7 @@ int wmain(int argc, wchar_t* argv[]) {
 
     // Validate that all essential paths could be resolved; exit if not
     if (gameDir.empty() || launcherDir.empty() || minhookAbs.empty() || dllAbs.empty()) {
-        std::wcerr << L"[FATAL] Could not resolve one or more required paths. Check arguments and file locations." << std::endl;
+        std::wcerr << L"[FATAL] Could not resolve one or more required paths. Check arguments/locations." << std::endl;
         return 1; // Indicate critical failure
     }
 
@@ -1042,7 +1110,6 @@ int wmain(int argc, wchar_t* argv[]) {
     if (!file_exists(exePath)) { std::wcerr << L"[FATAL] Game executable not found: " << exePath << std::endl; return 1; }
     if (!file_exists(rsiLauncherPath)) { std::wcerr << L"[FATAL] RSI Launcher executable not found: " << rsiLauncherPath << std::endl; return 1; }
 
-
     // --- Main Application Loop ---
     // This loop allows the entire process (launch/detect, inject, monitor) to be restarted.
     // The primary reason for restarting is if a direct launch fails due to login issues,
@@ -1058,13 +1125,23 @@ int wmain(int argc, wchar_t* argv[]) {
         bool launchedDirectly = false;      // Flag indicating if this iteration uses the direct launch path
         bool injectionFullySucceeded = false;// Flag tracking if both DLLs were injected successfully this iteration
         bool backupCreatedThisRun = false;  // Flag indicating if backup was made during an RSI Launcher run this iteration
+        bool envVarsSetThisRun = false;     // Track if env vars were set for this run (for cleanup logic)
 
         // --- Initial Cleanup for this Iteration ---
         // Clear the game log file at the start of each attempt to ensure fresh monitoring.
         std::wcout << L"[INFO] Clearing game log file: " << gameLogPath << std::endl;
         clear_or_delete_file(gameLogPath);
 
-        // --- Phase 1: Launch or Detect Game Process ---
+        // --- Phase 1: Set Env Vars & Launch/Detect ---
+        // The environment variables needed for injection are set *before* launching either process path.
+        // This requires elevation and happens at the start of each potential launch attempt (loop iteration).
+        if (!SetEnvironmentVariables()) {
+            std::wcerr << L"[FATAL] Failed initial environment variable setup. Exiting." << std::endl;
+            // Cleanup is attempted within SetEnvironmentVariables on failure, so just exit here.
+            return 1;
+        }
+        envVarsSetThisRun = true; // Mark env vars as successfully set for this iteration
+
         // Determine the launch strategy: Use backup if available, otherwise use RSI Launcher.
         if (file_exists(loginBackupPath)) {
             // === Direct Launch Path ===
@@ -1087,37 +1164,18 @@ int wmain(int argc, wchar_t* argv[]) {
                 // Copy the backup file to the active loginData.json location.
                 if (!copy_file(loginBackupPath, loginDataPath)) {
                     // This is critical - if backup exists but can't be copied, direct launch fails.
-                    std::wcerr << L"[ERROR] Failed to restore login data from backup file: " << loginBackupPath << std::endl;
-                    std::wcerr << L"        Check file permissions and disk space. Exiting." << std::endl;
+                    std::wcerr << L"[ERROR] Failed to restore login data from backup: " << loginBackupPath << std::endl;
+                    if (envVarsSetThisRun) CleanupEnvironmentVariables(false); // Clean up env vars before exiting
                     return 1; // Exit program; manual intervention needed.
                 }
 
-                std::wcout << L"[INFO] Launching " << GetFileName(exePath) << L" with arguments..." << std::endl;
-
-
-                std::wcout << L"Setting environment variables (may require elevation)..." << std::endl;
-                if (!RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL 1", true)) { // true = wait for completion
-                    std::wcerr << L"[ERROR] Failed to set system environment variable via setx." << std::endl;
-                    // Attempt to clean up registry entry before exiting if setx failed.
-                    RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-                    SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr); // Clean up local env var too
-                    return 1; // Exit on failure
-                }
-                // Also set the variable for the current process and its potential children (belt-and-suspenders).
-                if (!SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", L"1")) {
-                    std::wcerr << L"[WARN] Failed to set local environment variable. Error: " << GetLastError() << std::endl;
-                }
-
-
                 // Launch StarCitizen.exe, giving it its own console window.
-                if (!LaunchProcessWithArgs(exePath, gameArgs, piGame, gameBin64Dir, true)) {
+                std::wcout << L"[INFO] Launching " << GetFileName(exePath) << L" with arguments..." << std::endl;
+                if (!LaunchProcessWithArgs(exePath, gameArgs, piGame, gameBin64Dir, true)) { // true = new console
                     std::wcerr << L"[ERROR] Failed to launch game executable directly." << std::endl;
-                    std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
-                    RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
-                    RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-                    SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
                     // Clean up the potentially corrupted login data we just copied.
                     clear_or_delete_file(loginDataPath);
+                    if (envVarsSetThisRun) CleanupEnvironmentVariables(false); // Clean up env vars before exiting
                     return 1; // Exit program on launch failure.
                 }
                 // Store the PID of the process we just launched.
@@ -1138,33 +1196,15 @@ int wmain(int argc, wchar_t* argv[]) {
 
             // --- Begin RSI Launcher Procedure ---
             std::wcout << L"\n--- RSI Launcher Procedure ---" << std::endl;
+            // Environment variables were already set at the start of Phase 1.
 
-            // 1. Set Environment Variables for EAC Bypass
-            // This step requires administrator privileges for the 'setx /M' command.
-            std::wcout << L"[STEP 1/4] Setting environment variables (may require elevation)..." << std::endl;
-            if (!RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL 1", true)) { // true = wait for completion
-                std::wcerr << L"[ERROR] Failed to set system environment variable via setx." << std::endl;
-                // Attempt to clean up registry entry before exiting if setx failed.
-                RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-                SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr); // Clean up local env var too
-                return 1; // Exit on failure
-            }
-            // Also set the variable for the current process and its potential children (belt-and-suspenders).
-            if (!SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", L"1")) {
-                std::wcerr << L"[WARN] Failed to set local environment variable. Error: " << GetLastError() << std::endl;
-            }
-
-            // 2. Launch the RSI Launcher Executable
+            // 1. Launch the RSI Launcher Executable
             // Use the option to suppress its console output by redirecting std handles.
-            std::wcout << L"[STEP 2/4] Launching RSI Launcher (Output suppressed)..." << std::endl;
+            std::wcout << L"[INFO] Launching RSI Launcher (Output suppressed)..." << std::endl;
             PROCESS_INFORMATION rsiPi{}; // Structure to receive launcher process info
             if (!LaunchProcessWithArgs(rsiLauncherPath, L"", rsiPi, launcherDir, false)) { // false = no new console/redirect output
                 std::wcerr << L"[ERROR] Failed to launch RSI Launcher executable." << std::endl;
-                // Attempt environment cleanup before exiting
-                std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
-                RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
-                RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-                SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
+                if (envVarsSetThisRun) CleanupEnvironmentVariables(false); // Clean up env vars before exiting
                 return 1; // Exit on failure
             }
             launcherPid = rsiPi.dwProcessId; // Store the Launcher's PID
@@ -1172,7 +1212,7 @@ int wmain(int argc, wchar_t* argv[]) {
             if (rsiPi.hProcess) CloseHandle(rsiPi.hProcess);
             if (rsiPi.hThread) CloseHandle(rsiPi.hThread);
 
-            // 3. Wait for the User to Launch the Game
+            // 2. Wait for the User to Launch the Game
             // The user needs to interact with the RSI Launcher GUI, log in, and press the "Launch Game" button.
             std::wcout << L"\n[ACTION REQUIRED] Please log in via the RSI Launcher and launch Star Citizen." << std::endl;
             std::wcout << L"                 Waiting for '" << GAME_PROCESS_NAME << L"' process to appear (Timeout approx. 10 minutes)..." << std::endl;
@@ -1189,11 +1229,7 @@ int wmain(int argc, wchar_t* argv[]) {
                     if (hCheckLauncher == NULL || !GetExitCodeProcess(hCheckLauncher, &launcherExitCode) || launcherExitCode != STILL_ACTIVE) {
                         std::wcerr << L"[ERROR] RSI Launcher process (PID: " << launcherPid << ") exited unexpectedly before the game was launched." << std::endl;
                         if (hCheckLauncher) CloseHandle(hCheckLauncher);
-                        // Attempt environment cleanup before exiting
-                        std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
-                        RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
-                        RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-                        SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
+                        if (envVarsSetThisRun) CleanupEnvironmentVariables(false); // Clean up env vars before exiting
                         return 1; // Exit program
                     }
                     if (hCheckLauncher) CloseHandle(hCheckLauncher); // Close the check handle
@@ -1209,19 +1245,13 @@ int wmain(int argc, wchar_t* argv[]) {
                 std::wcerr << L"[ERROR] Timed out waiting for " << GAME_PROCESS_NAME << L" to start via RSI Launcher." << std::endl;
                 // Terminate the launcher if it's still running
                 if (launcherPid != 0) TerminateProcessByPid(launcherPid, RSI_LAUNCHER_EXE);
-                // Attempt environment cleanup before exiting
-                std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
-                RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
-                RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-                SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
+                if (envVarsSetThisRun) CleanupEnvironmentVariables(false); // Clean up env vars before exiting
                 return 1; // Exit on timeout
             }
 
             // Game process has been detected!
             std::wcout << L"[INFO] Game detected (PID: " << gamePid << ") launched via RSI Launcher." << std::endl;
-            // Don't wait here; proceed directly to Phase 2 (Injection).
-            // The subsequent Post-Injection tasks will handle waiting for login data and cleanup.
-
+            // Proceed directly to Phase 2 (Injection).
         } // End Mode Selection (if/else)
 
 
@@ -1269,19 +1299,15 @@ int wmain(int argc, wchar_t* argv[]) {
                     }
 
                     // --- Cleanup after failed injection ---
-                    // If this happened during the RSI Launcher path, ensure launcher and env vars are cleaned up.
-                    if (!launchedDirectly) {
-                        if (launcherPid != 0) TerminateProcessByPid(launcherPid, RSI_LAUNCHER_EXE);
-                        // Clean up environment variables (run regardless of previous success, safer)
-                        
+                    // If this happened during the RSI Launcher path, ensure launcher is closed.
+                    if (!launchedDirectly && launcherPid != 0) {
+                        TerminateProcessByPid(launcherPid, RSI_LAUNCHER_EXE); // Ensure launcher is closed
                     }
                     // Close game process handles if we created them during direct launch
                     if (piGame.hProcess) CloseHandle(piGame.hProcess);
                     if (piGame.hThread) CloseHandle(piGame.hThread);
-                    std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
-                    RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
-                    RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-                    SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
+                    // Clean up environment variables before exiting
+                    if (envVarsSetThisRun) CleanupEnvironmentVariables(false);
                     return 1; // Exit the program with an error code due to injection failure
                 }
             }
@@ -1293,14 +1319,9 @@ int wmain(int argc, wchar_t* argv[]) {
                 if (piGame.hProcess) CloseHandle(piGame.hProcess);
                 if (piGame.hThread) CloseHandle(piGame.hThread);
                 // Clean up launcher path resources if necessary
-                if (!launchedDirectly) {
-                    if (launcherPid != 0) TerminateProcessByPid(launcherPid, RSI_LAUNCHER_EXE);
-                   
-                }
-                std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
-                RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
-                RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-                SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
+                if (!launchedDirectly && launcherPid != 0) TerminateProcessByPid(launcherPid, RSI_LAUNCHER_EXE);
+                // Clean up environment variables before exiting
+                if (envVarsSetThisRun) CleanupEnvironmentVariables(false);
                 return 1; // Exit because game didn't stay running long enough
             }
         }
@@ -1310,10 +1331,10 @@ int wmain(int argc, wchar_t* argv[]) {
             // Attempt cleanup just in case handles were somehow set
             if (piGame.hProcess) CloseHandle(piGame.hProcess);
             if (piGame.hThread) CloseHandle(piGame.hThread);
-            if (!launchedDirectly) { /* Cleanup launcher stuff if needed */ if (launcherPid != 0) TerminateProcessByPid(launcherPid, RSI_LAUNCHER_EXE); /* ... env vars ... */ }
+            // Clean up env vars if they were set
+            if (envVarsSetThisRun) CleanupEnvironmentVariables(false);
             return 1;
         }
-
 
         // --- Phase 3: Post-Injection Launcher Tasks ---
         // This section only executes if the program used the RSI Launcher path *and* DLL injection succeeded.
@@ -1325,15 +1346,15 @@ int wmain(int argc, wchar_t* argv[]) {
             std::wcout << L"[INFO] Waiting after injection for login data file finalization (approx. 15 seconds)..." << std::endl;
             std::this_thread::sleep_for(std::chrono::seconds(15));
 
-            // Attempt to backup the loginData.json file now that the game should have created it.
-            std::wcout << L"[STEP 3/5] Checking for login data file for backup..." << std::endl;
+            // 3. Attempt to backup the loginData.json file now that the game should have created it.
+            std::wcout << L"[INFO] Checking for login data file for backup..." << std::endl;
             if (file_exists(loginDataPath)) {
                 std::wcout << L"[INFO] Found " << LOGIN_DATA_FILE << ". Attempting backup..." << std::endl;
                 if (copy_file(loginDataPath, loginBackupPath)) {
                     backupCreatedThisRun = true; // Set flag indicating backup was successful this run
                 }
                 else {
-                    std::wcerr << L"[ERROR] Failed to backup login data file. Check permissions/disk space." << std::endl;
+                    std::wcerr << L"[WARN] Failed to backup login data file. Check permissions/disk space." << std::endl;
                     // Continue without backup, but log warning.
                 }
             }
@@ -1342,20 +1363,15 @@ int wmain(int argc, wchar_t* argv[]) {
                 // Continue without backup.
             }
 
-            // Terminate the RSI Launcher process now that the game is running and backup attempted.
+            // 4. Terminate the RSI Launcher process now that the game is running and backup attempted.
             if (launcherPid != 0) {
-                std::wcout << L"[STEP 4/5] Closing RSI Launcher (PID: " << launcherPid << ")..." << std::endl;
+                std::wcout << L"[INFO] Closing RSI Launcher (PID: " << launcherPid << ")..." << std::endl;
                 if (!TerminateProcessByPid(launcherPid, RSI_LAUNCHER_EXE)) {
                     std::wcerr << L"[WARN] Failed to automatically close the RSI Launcher (may already be closed)." << std::endl;
                 }
             }
 
-            // Cleanup the environment variables set at the beginning of the launcher path.
-            std::wcout << L"[STEP 5/5] Cleaning up environment variables (requires elevation)..." << std::endl;
-            RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true); // Unset machine-level variable
-            RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true); // Delete registry entry
-            SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr); // Unset local variable
-
+            // Environment variables are NOT cleaned up here. They persist until the game exits or the injector restarts/fails.
             // Log whether the backup succeeded for user information.
             if (!backupCreatedThisRun) {
                 std::wcout << L"[WARN] Completed Launcher Mode tasks, but login data backup was NOT created." << std::endl;
@@ -1390,26 +1406,21 @@ int wmain(int argc, wchar_t* argv[]) {
                     else {
                         // Handle rare thread creation failure
                         std::wcerr << L"[ERROR] Failed to create log monitor thread!" << std::endl;
-                        // If monitor fails, terminate game if we launched it, then exit program
+                        // If monitor fails, terminate game if we launched it, then clean up and exit program
                         if (piGame.hProcess) TerminateProcessByPid(gamePid, GAME_PROCESS_NAME);
-                        std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
-                        RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
-                        RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-                        SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
+                        if (envVarsSetThisRun) CleanupEnvironmentVariables(false); // Clean up before exit
                         return 1;
                     }
                 }
                 else {
                     // Game died just before monitor thread could start
                     std::wcerr << L"[ERROR] Game process exited before log monitor thread could start." << std::endl;
-                    std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
-                    RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
-                    RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-                    SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
                     if (hMonitorCheck) CloseHandle(hMonitorCheck);
                     // Clean up our direct launch handles if necessary
                     if (piGame.hProcess) CloseHandle(piGame.hProcess);
                     if (piGame.hThread) CloseHandle(piGame.hThread);
+                    // Clean up environment variables before exiting
+                    if (envVarsSetThisRun) CleanupEnvironmentVariables(false);
                     return 1; // Exit as game isn't running
                 }
             }
@@ -1426,13 +1437,12 @@ int wmain(int argc, wchar_t* argv[]) {
                 // === Check 1: Login Failure (only in Direct Launch mode) ===
                 if (launchedDirectly && g_loginFailed) {
                     // Login failure detected by the monitor thread!
-                    std::wcerr << L"\n[CRITICAL] Login failure detected in log (Direct Launch Mode)!" << std::endl;
+                    std::wcerr << L"\n[CRITICAL] Login failure detected in log" << std::endl;
                     std::wcerr << L"             Terminating game and deleting potentially invalid login data." << std::endl;
                     TerminateProcessByPid(gamePid, GAME_PROCESS_NAME); // Force close the game
-                    std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
-                    RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
-                    RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-                    SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
+                    // Clean up environment variables *before* restarting the loop
+                    if (envVarsSetThisRun) CleanupEnvironmentVariables(false);
+                    envVarsSetThisRun = false; // Mark as cleaned up before restart
                     clear_or_delete_file(loginBackupPath);             // Delete the problematic backup
                     clear_or_delete_file(loginDataPath);               // Delete the problematic current data
                     std::wcout << L"[INFO] Restarting process to use RSI Launcher mode in 5 seconds..." << std::endl;
@@ -1464,22 +1474,21 @@ int wmain(int argc, wchar_t* argv[]) {
 
         }
         else {
-            // Should not be reachable if previous checks worked correctly (injection failed or PID bad)
+            // Should not be reachable if previous checks worked correctly (injection failed or bad PID)
             std::wcerr << L"[ERROR] Internal State Error: Reached monitoring stage unexpectedly (PID=" << gamePid << ", InjectionSuccess=" << injectionFullySucceeded << "). Exiting." << std::endl;
-            // Attempt cleanup just in case
+            // Cleanup just in case
             if (piGame.hProcess) CloseHandle(piGame.hProcess);
             if (piGame.hThread) CloseHandle(piGame.hThread);
+            if (envVarsSetThisRun) CleanupEnvironmentVariables(false); // Clean up env vars
             return 1;
         }
 
 
         // --- Phase 5: Post-Game Exit Cleanup ---
         // This code executes after the main wait loop breaks, meaning the game process has terminated normally.
-        std::wcout << L"\n--- Post-Game Cleanup ---" << std::endl;
-        std::wcout << L"Cleaning up environment variables (requires elevation)..." << std::endl;
-        RunElevated(L"setx", L"/M EOS_USE_ANTICHEATCLIENTNULL \"\"", true);
-        RunElevated(L"REG", L"delete \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\" /F /V EOS_USE_ANTICHEATCLIENTNULL", true);
-        SetEnvironmentVariableW(L"EOS_USE_ANTICHEATCLIENTNULL", nullptr);
+        // Perform final cleanup actions before the injector program exits.
+        if (envVarsSetThisRun) CleanupEnvironmentVariables(true); // Perform FINAL cleanup (only if they were set this run)
+
         // Delete the current loginData.json file. This ensures that if the backup exists,
         // the next run will use the direct launch path. If backup doesn't exist, this has no effect.
         std::wcout << L"[INFO] Deleting current login data file (if exists): " << loginDataPath << std::endl;
@@ -1498,19 +1507,18 @@ int wmain(int argc, wchar_t* argv[]) {
         // This label is the target for the 'goto' statement used when a login failure occurs
         // during direct launch mode, forcing a restart of the main application loop.
     restart_main_loop:;
-
         // --- Cleanup Before Restarting Loop ---
         // Ensure process handles are closed before the next iteration starts.
         if (piGame.hProcess) CloseHandle(piGame.hProcess);
         if (piGame.hThread) CloseHandle(piGame.hThread);
         // Note: The detached logMonitorThread will exit on its own when it detects the game process is gone or finds an error/success.
+        // Note: Environment variables were cleaned up *before* the goto jump.
 
         // Print message indicating the restart reason
         std::wcout << L"\n-----------------------------------------" << std::endl;
         std::wcout << L"Restarting main process loop due to login failure..." << std::endl;
         std::wcout << L"-----------------------------------------\n" << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Brief pause before the next loop iteration
-
 
     } // End while(true) - Main Application Loop
 
