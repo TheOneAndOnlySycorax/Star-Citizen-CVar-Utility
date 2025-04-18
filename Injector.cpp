@@ -941,7 +941,7 @@ void ShowHelp() {
 
 
     std::wcout << L"Usage:\n";
-    std::wcout << L"  StarCitizenInjector.exe [options]\n\n";
+    std::wcout << L"  Injector.exe [options]\n\n";
 
     std::wcout << L"Options:\n";
     std::wcout << L"  -h, --help\n";
@@ -972,7 +972,7 @@ void ShowHelp() {
     std::wcout << L"               \"" << DEFAULT_GAME_ARGS << L"\"\n\n";
 
     std::wcout << L"Example:\n";
-    std::wcout << L"  StarCitizenInjector.exe --gameDir \"D:\\Games\\StarCitizen\\LIVE\" --mainDLLPath \"MyOverlay.dll\"\n\n";
+    std::wcout << L"  Injector.exe --gameDir \"D:\\Games\\StarCitizen\\LIVE\" --mainDLLPath \"MyOverlay.dll\"\n\n";
 }
 
 
