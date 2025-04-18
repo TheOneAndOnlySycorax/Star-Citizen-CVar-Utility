@@ -917,6 +917,65 @@ bool TerminateProcessByPid(DWORD pid, const std::wstring& processNameHint) {
     return true; // Indicate termination success
 }
 
+/**
+ * @brief Displays the help message containing program description, usage, and options.
+ */
+void ShowHelp() {
+    std::wcout << L"\n=== Star Citizen Injector/Launcher Help ===\n\n";
+    std::wcout << L"Description:\n";
+    std::wcout << L"  Launches Star Citizen and injects specified DLLs immediately after the game starts.\n";
+    std::wcout << L"  Supports two launch modes:\n";
+    std::wcout << L"    1. Direct Launch: If a '" << LOGIN_DATA_BACKUP_FILE << L"' exists, it restores\n";
+    std::wcout << L"       this data and automatically launches " << GAME_PROCESS_NAME << L" directly.\n";
+    std::wcout << L"       'In this mode, it monitors '" << GAME_LOG_FILE << L"' for login failures and\n";
+    std::wcout << L"        will restart using the RSI Launcher if a failure is detected.\n";
+    std::wcout << L"    2. Via RSI Launcher: If no backup of login data exists, it starts '" << RSI_LAUNCHER_EXE << L"',\n";
+    std::wcout << L"       waits for the user to launch the game via the launcher, injects DLLs,\n";
+    std::wcout << L"       attempts to create '" << LOGIN_DATA_BACKUP_FILE << L"', and closes the launcher.\n";
+    std::wcout << L"       This mode requires elevated privileges for environment variable setup/cleanup.\n\n";
+    
+    std::wcout << L"  Why dose this program need to backup 'loginData.json'?:\n";
+    std::wcout << L"    Star Citizen requires 'loginData.json' to run and automatically deletes it on exit.\n"; 
+    std::wcout << L"    So by creating a backup of this file, it ensures that there has valid data to restore\n";
+    std::wcout << L"    whenever this program automatically launches the game.\n\n";
+
+
+    std::wcout << L"Usage:\n";
+    std::wcout << L"  StarCitizenInjector.exe [options]\n\n";
+
+    std::wcout << L"Options:\n";
+    std::wcout << L"  -h, --help\n";
+    std::wcout << L"      Show this help message and exit.\n\n";
+
+    std::wcout << L"  --gameDir <path>\n";
+    std::wcout << L"      Specify the path to the Star Citizen installation directory\n";
+    std::wcout << L"      (e.g., \"C:\\Program Files\\Roberts Space Industries\\StarCitizen\\LIVE\").\n";
+    std::wcout << L"      Default: \"" << DEFAULT_GAME_DIR << L"\"\n\n";
+
+    std::wcout << L"  --launcherDir <path>\n";
+    std::wcout << L"      Specify the path to the RSI Launcher installation directory.\n";
+    std::wcout << L"      Default: \"" << DEFAULT_LAUNCHER_DIR << L"\"\n\n";
+
+    std::wcout << L"  --minhookPath <path>\n";
+    std::wcout << L"      Specify the path (relative or absolute) to the MinHook DLL (e.g., minhook.x64.dll).\n";
+    std::wcout << L"      This is typically required by the main DLL.\n";
+    std::wcout << L"      Default: \"" << MINHOOK_DLL_DEFAULT << L"\"\n\n";
+
+    std::wcout << L"  --mainDLLPath <path>\n";
+    std::wcout << L"      Specify the path (relative or absolute) to the primary DLL to inject (e.g., MyMod.dll).\n";
+    std::wcout << L"      Default: \"" << MAIN_DLL_DEFAULT << L"\"\n\n";
+
+    std::wcout << L"  --gameArgs \"<arguments>\"\n";
+    std::wcout << L"      Specify the command-line arguments to use when launching " << GAME_PROCESS_NAME << L" directly.\n";
+    std::wcout << L"      Enclose the entire argument string in double quotes if it contains spaces.\n";
+    std::wcout << L"      Default: (A long string including -no_login_dialog, etc.)\n";
+    std::wcout << L"               \"" << DEFAULT_GAME_ARGS << L"\"\n\n";
+
+    std::wcout << L"Example:\n";
+    std::wcout << L"  StarCitizenInjector.exe --gameDir \"D:\\Games\\StarCitizen\\LIVE\" --mainDLLPath \"MyOverlay.dll\"\n\n";
+}
+
+
 
 // --- Main Program Entry Point ---
 
@@ -933,6 +992,16 @@ int wmain(int argc, wchar_t* argv[]) {
     // Print program header
     std::wcout << L"=== Star Citizen Injector/Launcher v0.2 by Sycorax ===\n" << std::endl;
 
+    // --- Help Option Check ---
+   // Check for -h or --help *before* parsing other arguments or doing work.
+    for (int i = 1; i < argc; ++i) {
+        if (wcscmp(argv[i], L"-h") == 0 || wcscmp(argv[i], L"--help") == 0) {
+            ShowHelp();
+            return 0; // Exit cleanly after showing help
+        }
+    }
+
+    std::wcout << L"    (Use -h or --help for command line options)\n" << std::endl;
     // --- Argument Parsing & Path Setup ---
     // Parse command line arguments using the helper function
     std::map<std::wstring, std::wstring> args = parse_args(argc, argv);
