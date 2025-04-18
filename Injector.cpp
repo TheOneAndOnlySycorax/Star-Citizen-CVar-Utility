@@ -16,7 +16,7 @@
 // The above copyright notice and this permission notice shall be included in
 // all copies or substantial portions of the Software.
 //
-// THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// THE SOFTWARE IS PROVIDED ï¿½AS ISï¿½, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
 // THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
@@ -471,7 +471,24 @@ bool LaunchProcessWithArgs(const std::wstring& exePath, const std::wstring& args
  */
 bool RunElevated(const std::wstring& command, const std::wstring& args, bool wait = true) {
     // Initialize the SHELLEXECUTEINFO structure
-    SHELLEXECUTEINFOW sei = { sizeof(sei) }; // Use structure initializer
+    // Initialize all fields to avoid missing initializer warnings
+    SHELLEXECUTEINFOW sei = { 
+        sizeof(sei),         // cbSize
+        0,                   // fMask 
+        NULL,                // hwnd
+        NULL,                // lpVerb
+        NULL,                // lpFile
+        NULL,                // lpParameters
+        NULL,                // lpDirectory
+        0,                   // nShow
+        0,                   // hInstApp
+        NULL,                // lpIDList
+        NULL,                // lpClass
+        NULL,                // hkeyClass
+        0,                   // dwHotKey
+        {0},                 // Anonymous union (HANDLE_PTR or hIcon/hMonitor)
+        NULL                 // hProcess
+    };
     sei.cbSize = sizeof(sei);         // Must set the size of the structure
     sei.lpVerb = L"runas";            // Specify the "runas" verb to request elevation
     sei.lpFile = command.c_str();     // Path to the executable to run
@@ -774,7 +791,7 @@ void MonitorLogFile(std::wstring logFilePath, DWORD gamePid) {
         // Proceed only if we could read the size AND (the size increased OR it's the first check)
         if (sizeRead && (currentSize.QuadPart > lastSize.QuadPart || firstCheck)) {
             // Open the log file for reading in binary mode (safer for seeking)
-            logStream.open(logFilePath, std::ios::in | std::ios::binary);
+            logStream.open(logFilePath.c_str(), std::ios::in | std::ios::binary);
             if (logStream.is_open()) {
                 std::streampos readStartPos = 0; // Position in file to start reading from
 

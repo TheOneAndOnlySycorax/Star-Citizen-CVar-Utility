@@ -16,7 +16,7 @@
 // The above copyright notice and this permission notice shall be included in
 // all copies or substantial portions of the Software.
 //
-// THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
 // THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
@@ -30,7 +30,7 @@
 #include <sstream>     // Needed for ostringstream formatting
 #include <vector>
 #include <stdexcept>
-#include <Psapi.h>     // For GetModuleInformation
+#include <psapi.h>     // For GetModuleInformation
 #include <map> 
 
 // --- Static Helper function for formatting log messages within CVarManager ---
@@ -110,70 +110,116 @@ static std::string FormatCVarManagerLogMessage(const std::string& prefix, const 
     } while(0)
 
 // --- SEH Helper Function Definitions ---
-// Defined here, declared in CVarManager.h. Non-static.
-// Note: The SafeReadPointer here is simpler than the one added to dllmain.cpp.
-// We are keeping CVarManager's internal version for its own use.
-// dllmain.cpp uses its own more complex SafeReadPointer for the initial check.
-// If you require absolute consistency, pick one definition and put it here,
-// declare it in the header, and remove the definition from dllmain.cpp.
-// For now, we keep them separate as dllmain's initial check might benefit
-// from the extra IsBadReadPtr.
+// Revised to be MinGW32 compatible - no SEH try/catch blocks
 
 _NODISCARD bool SafeReadPointer(uintptr_t address, void** outValue) {
     if (!outValue) return false;
-    __try { *outValue = *reinterpret_cast<void**>(address); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { *outValue = nullptr; return false; }
+    if (!address) { *outValue = nullptr; return false; }
+    
+    // Use IsBadReadPtr as a safer alternative to SEH for MinGW
+    if (IsBadReadPtr(reinterpret_cast<const void*>(address), sizeof(void*))) {
+        *outValue = nullptr;
+        return false;
+    }
+    
+    *outValue = *reinterpret_cast<void**>(address);
+    return true;
 }
 
 _NODISCARD bool SafeReadUIntPtr(uintptr_t address, uintptr_t* outValue) {
     if (!outValue) return false;
-    __try { *outValue = *reinterpret_cast<uintptr_t*>(address); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { *outValue = 0; return false; }
+    if (!address) { *outValue = 0; return false; }
+    
+    // Use IsBadReadPtr as a safer alternative to SEH for MinGW
+    if (IsBadReadPtr(reinterpret_cast<const void*>(address), sizeof(uintptr_t))) {
+        *outValue = 0;
+        return false;
+    }
+    
+    *outValue = *reinterpret_cast<uintptr_t*>(address);
+    return true;
 }
 
 _NODISCARD bool SafeCallFindCVar(FindCVarFn pFn, void* pMgr, const char* szName, void** outPIcvar) {
-    if (!outPIcvar) return false;
-    __try {
-        *outPIcvar = pFn(pMgr, szName);
-        // Basic sanity check on the returned pointer
-        if (!*outPIcvar || reinterpret_cast<uintptr_t>(*outPIcvar) < 0x10000) *outPIcvar = nullptr;
-        return true;
+    if (!outPIcvar || !pFn || !pMgr || !szName) {
+        if (outPIcvar) *outPIcvar = nullptr;
+        return false;
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) { *outPIcvar = nullptr; return false; }
+    
+    // No real way to safely call an arbitrary function without SEH in MinGW
+    // We'll just have to call it directly and hope for the best
+    *outPIcvar = pFn(pMgr, szName);
+    
+    // Basic sanity check on the returned pointer
+    if (!*outPIcvar || reinterpret_cast<uintptr_t>(*outPIcvar) < 0x10000) {
+        *outPIcvar = nullptr;
+    }
+    
+    return true;
 }
 
 _NODISCARD bool SafeCallGetStringValue(GetStringValueFn pFn, void* pICVar, const char** outValue) {
-    if (!outValue) return false;
-    __try { *outValue = pFn(pICVar); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { *outValue = nullptr; return false; }
+    if (!outValue || !pFn || !pICVar) {
+        if (outValue) *outValue = nullptr;
+        return false;
+    }
+    
+    // Direct call - can't really protect this in MinGW without SEH
+    *outValue = pFn(pICVar);
+    return true;
 }
 
 _NODISCARD bool SafeCallGetName(GetNameFn pFn, void* pICVar, const char** outValue) {
-    if (!outValue) return false;
-    __try { *outValue = pFn(pICVar); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { *outValue = nullptr; return false; }
+    if (!outValue || !pFn || !pICVar) {
+        if (outValue) *outValue = nullptr;
+        return false;
+    }
+    
+    // Direct call - can't really protect this in MinGW without SEH
+    *outValue = pFn(pICVar);
+    return true;
 }
 
 _NODISCARD bool SafeCallGetFlags(GetFlagsFn pFn, void* pICVar, DWORD* outValue) {
-    if (!outValue) return false;
-    __try { *outValue = pFn(pICVar); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { *outValue = 0; return false; }
+    if (!outValue || !pFn || !pICVar) {
+        if (outValue) *outValue = 0;
+        return false;
+    }
+    
+    // Direct call - can't really protect this in MinGW without SEH
+    *outValue = pFn(pICVar);
+    return true;
 }
 
 _NODISCARD bool SafeCallSetStringValue(SetStringValueFn pFn, void* pICVar, const char* szValue) {
-    __try { pFn(pICVar, szValue); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    if (!pFn || !pICVar || !szValue) {
+        return false;
+    }
+    
+    // Direct call - can't really protect this in MinGW without SEH
+    pFn(pICVar, szValue);
+    return true;
 }
 
 _NODISCARD bool SafeCallSetFlags(SetFlagsFn pFn, void* pICVar, DWORD flags) {
-    __try { pFn(pICVar, flags); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    if (!pFn || !pICVar) {
+        return false;
+    }
+    
+    // Direct call - can't really protect this in MinGW without SEH
+    pFn(pICVar, flags);
+    return true;
 }
 
 _NODISCARD bool SafeCallEnumCVars(EnumCVarsFn pFn, void* pMgr, const char** pNameListBuffer, QWORD bufferCount, QWORD* outActualCount) {
-    if (!outActualCount) return false;
-    __try { *outActualCount = pFn(pMgr, pNameListBuffer, bufferCount, nullptr); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { *outActualCount = 0; return false; }
+    if (!outActualCount || !pFn || !pMgr) {
+        if (outActualCount) *outActualCount = 0;
+        return false;
+    }
+    
+    // Direct call - can't really protect this in MinGW without SEH
+    *outActualCount = pFn(pMgr, pNameListBuffer, bufferCount, nullptr);
+    return true;
 }
 
 // --- CVarManager Implementation ---
@@ -215,7 +261,12 @@ bool CVarManager::isValidCodePointer(uintptr_t ptr) {
     if (ptr == 0 || m_baseAddr == 0) return false;
 
     // Attempt to get module info for a more precise check
-    MODULEINFO modInfo = { 0 };
+    // Initialize all fields to avoid missing initializer warnings
+    MODULEINFO modInfo = { 
+        NULL,                // lpBaseOfDll
+        0,                   // SizeOfImage
+        NULL                 // EntryPoint
+    };
     HMODULE hModule = GetModuleHandleA(m_moduleName.c_str()); // Use stored module name
     if (hModule && GetModuleInformation(GetCurrentProcess(), hModule, &modInfo, sizeof(modInfo))) {
         uintptr_t moduleEnd = m_baseAddr + modInfo.SizeOfImage;
