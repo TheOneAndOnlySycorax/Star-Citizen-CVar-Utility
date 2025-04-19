@@ -16,7 +16,7 @@
 // The above copyright notice and this permission notice shall be included in
 // all copies or substantial portions of the Software.
 //
-// THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
 // THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
@@ -159,6 +159,56 @@ void PrintToConsole(const std::string& message) {
         &charsWritten,
         NULL
     );
+}
+
+// --- Helper: Reverse Map for Flag Name -> Flag Bit Lookup ---
+// Creates a map to look up CVar flag enum values by their string names.
+static std::map<std::string, CVarFlags> CreateReverseFlagMap() {
+    std::map<std::string, CVarFlags> reverseMap;
+    // This map should mirror the flags defined in CVarFlags.h and used in CVarManager
+    static const std::map<CVarFlags, std::string> flagMap = {
+        // {CVarFlags::VF_NONE, "VF_NONE"}, // VF_NONE (0) is generally not set/cleared explicitly by name
+        {CVarFlags::VF_CHEAT, "VF_CHEAT"},
+        {CVarFlags::VF_READONLY, "VF_READONLY"},
+        {CVarFlags::VF_REQUIRE_APP_RESTART, "VF_REQUIRE_APP_RESTART"},
+        {CVarFlags::VF_NO_HELP, "VF_NO_HELP"},
+        {CVarFlags::VF_WHITELIST_FLAG_2, "VF_WHITELIST_FLAG_2"},
+        {CVarFlags::VF_WHITELIST_FLAG_1, "VF_WHITELIST_FLAG_1"},
+        {CVarFlags::VF_DUMPTODISK, "VF_DUMPTODISK"},
+        {CVarFlags::VF_INVISIBLE, "VF_INVISIBLE"},
+        {CVarFlags::VF_CONST_CVAR, "VF_CONST_CVAR"},
+        {CVarFlags::VF_NODUMP, "VF_NODUMP"},
+        {CVarFlags::VF_MODIFIED_BY_CONFIG, "VF_MODIFIED_BY_CONFIG"},
+        {CVarFlags::VF_BITFIELD, "VF_BITFIELD"},
+        {CVarFlags::VF_CONTEXT_FLAG_1, "VF_CONTEXT_FLAG_1"},
+        {CVarFlags::VF_DEPRECATED, "VF_DEPRECATED"},
+        {CVarFlags::VF_ALWAYS_NOTIFY, "VF_ALWAYS_NOTIFY"},
+        {CVarFlags::VF_BADGECHECK, "VF_BADGECHECK"},
+        {CVarFlags::VF_NO_CONFIG_LOAD, "VF_NO_CONFIG_LOAD"},
+        {CVarFlags::VF_NET_SYNCED, "VF_NET_SYNCED"}
+    };
+    for (const auto& pair : flagMap) {
+        // Only add non-zero flags to the reverse map
+        if (pair.first != CVarFlags::VF_NONE) {
+             reverseMap[pair.second] = pair.first;
+        }
+    }
+    return reverseMap;
+}
+
+// Static instance of the reverse flag map for efficient lookup.
+static const std::map<std::string, CVarFlags> g_reverseFlagMap = CreateReverseFlagMap();
+
+// Helper function to get the DWORD bitmask for a given flag name string.
+// Returns 0 if the flag name is not recognized.
+DWORD GetFlagBitFromString(const std::string& flagName) {
+    auto it = g_reverseFlagMap.find(flagName);
+    if (it != g_reverseFlagMap.end()) {
+        return static_cast<DWORD>(it->second);
+    }
+    // Could add support for hex strings "0x..." here if needed
+    DLL_LOG_WARN("Unknown or unsupported CVar flag name encountered in JSON: '" << flagName << "'");
+    return 0; // Return 0 for unknown/unsupported flags
 }
 
 /**
@@ -1227,24 +1277,33 @@ void PrintJsonFormatExample() {
     PrintToConsole("\nExpected JSON Format:");
     PrintToConsole("   The JSON file should contain an array of objects.");
     PrintToConsole("   Each object MUST have a 'cVarName' (string) and 'value' (string).");
-    PrintToConsole("   The 'flags' key array is optional and is currently ignored.");
+    PrintToConsole("   An optional 'flags' key can contain an array of strings:");
+    PrintToConsole("     - Flag names (e.g., \"VF_CHEAT\") will be ADDED to the CVar's flags.");
+    PrintToConsole("     - Flag names prefixed with '!' (e.g., \"!VF_READONLY\") will be REMOVED.");
+    PrintToConsole("     - Unknown flag names are ignored with a warning.");
+    PrintToConsole("     - If the 'flags' key is missing, flags are not modified.");
     PrintToConsole("\n   Example:");
     PrintToConsole(R"(      [
-        {
-          "cVarName": "p_rigid_gforce_scale",
-          "value": "0.5",
-          "flags": ["VF_NONE"]
-        },
-        {
-          "cVarName": "p_fly_mode",
-          "value": "0"
-        },
-        {
-          "cVarName": "v_qdrive.instant_qt",
-          "value": "1",
-          "flags": []
-        }
-      ])");
+         {
+           "cVarName": "p_rigid_gforce_scale",
+           "value": "0.5"
+         },
+         {
+           "cVarName": "p_fly_mode",
+           "value": "0",
+           "flags": ["!VF_READONLY"]
+         },
+         {
+           "cVarName": "v_qdrive.instant_qt",
+           "value": "1",
+           "flags": []
+         },
+         {
+           "cVarName": "sys_spec",
+           "value": "4",
+           "flags": []
+         }
+       ])");
     // PrintToConsole("------------------------------------"); // Separator not present in code
 }
 
@@ -1321,8 +1380,11 @@ void HandleLoadCVarsFromJson() {
     char mbFilePath[MAX_PATH] = { 0 }; // For logging
     WideCharToMultiByte(CP_UTF8, 0, wFilePath.c_str(), -1, mbFilePath, MAX_PATH, NULL, NULL);
     DLL_LOG_INFO("User selected file: " << mbFilePath);
-
-    std::ifstream jsonFile(wFilePath); // Open using wide path
+#if defined(_MSC_VER)    
+    std::ifstream jsonFile(wFilePath);
+#elif defined(__GNUC__) 
+    std::ifstream jsonFile(wstring_to_utf8(wFilePath)); // Convert from wide path to UTF-8
+#endif
     if (!jsonFile.is_open()) {
         DLL_LOG_ERROR("Failed to open file: " << mbFilePath);
         ShowHotkeyMenu();
@@ -1371,6 +1433,8 @@ void HandleLoadCVarsFromJson() {
     int successCount = 0;
     int failureCount = 0;
     int skippedCount = 0;
+    int flagsModifiedCount = 0; // Track how many CVars had flags potentially changed
+    int flagsFailedCount = 0;   // Track failures during flag setting
 
     for (const auto& item : jsonData) { // Iterate through array elements
         if (CheckForEndKeyAndUnload()) { return; } // Check during loop
@@ -1407,37 +1471,121 @@ void HandleLoadCVarsFromJson() {
             continue;
         }
 
-        // Attempt to set the CVar
-        DLL_LOG_INFO("\nAttempting to set '" << cvarName << "' = \"" << value << "\"");
+        // --- Attempt to set the CVar Value ---
+        DLL_LOG_INFO("\nProcessing CVar: '" << cvarName << "'");
+        DLL_LOG_INFO("  Attempting to set value = \"" << value << "\"");
+        bool valueSetAttempted = false; // Track if we tried to set the value
+        bool valueSetSucceeded = false; // Track if the setValue call itself succeeded
+
         if (g_pCVarManager->setValue(cvarName, value)) {
-            // Optional verification read
+            valueSetAttempted = true;
+            valueSetSucceeded = true; // The call itself didn't fail/crash
+            // Optional verification read (existing code)
             auto verifyPair = g_pCVarManager->getValue(cvarName);
             if (verifyPair.second) { // Verification succeeded
                 if (verifyPair.first == value) {
-                    DLL_LOG_INFO("Successfully set '" << cvarName << "' to \"" << value << "\"");
+                    DLL_LOG_INFO("  Successfully set value for '" << cvarName << "'");
+                } else { // Readback value differs
+                    DLL_LOG_WARN("  Set value for '" << cvarName << "', but read back \"" << verifyPair.first << "\". Game might have modified or constrained it.");
                 }
-                else { // Readback value differs
-                    DLL_LOG_WARN("Set '" << cvarName << "' to \"" << value << "\", but read back \"" << verifyPair.first << "\". Game might have modified or constrained it.");
-                }
+            } else { // Verification failed
+                DLL_LOG_WARN("  Set value for '" << cvarName << "', but failed to verify readback.");
             }
-            else { // Verification failed
-                DLL_LOG_WARN("Set '" << cvarName << "' to \"" << value << "\", but failed to verify readback.");
-            }
+            // Increment successCount based on the initial call succeeding,
+            // even if verification shows a different value later.
             successCount++;
-        }
-        else { // setValue call failed
-            DLL_LOG_ERROR("Failed to set CVar '" << cvarName << "' to value \"" << value << "\"");
+        } else { // setValue call failed (e.g., readonly flag, exception)
+            valueSetAttempted = true;
+            valueSetSucceeded = false;
+            // Error is already logged by setValue
+            // DLL_LOG_ERROR("  Failed to set value for CVar '" << cvarName << "'");
             failureCount++;
         }
+
+        // --- Process Optional Flags ---
+        if (item.contains("flags") && item["flags"].is_array()) {
+            DLL_LOG_INFO("  Processing flags for '" << cvarName << "'...");
+
+            // Get current flags first
+            auto currentFlagsPair = g_pCVarManager->getFlags(cvarName);
+            if (!currentFlagsPair.second) {
+                DLL_LOG_ERROR("    Failed to get current flags for '" << cvarName << "'. Cannot modify flags.");
+                flagsFailedCount++; // Count as a flag failure
+            } else {
+                DWORD currentFlags = currentFlagsPair.first;
+                DWORD flagsToSet = currentFlags; // Start with current flags
+                bool flagsChanged = false;       // Track if any modifications are made
+
+                for (const auto& flagEntry : item["flags"]) {
+                    if (!flagEntry.is_string()) {
+                        DLL_LOG_WARN("    Skipping non-string entry in flags array.");
+                        continue;
+                    }
+
+                    std::string flagStr = flagEntry.get<std::string>();
+                    if (flagStr.empty()) continue; // Skip empty strings
+
+                    bool removeFlag = (flagStr[0] == '!');
+                    std::string flagName = removeFlag ? flagStr.substr(1) : flagStr;
+
+                    if (flagName.empty()) { // Handle case like "!"
+                         DLL_LOG_WARN("    Skipping invalid empty flag name after '!'.");
+                         continue;
+                    }
+
+                    DWORD flagBit = GetFlagBitFromString(flagName);
+
+                    if (flagBit != 0) { // If the flag name is known
+                        if (removeFlag) {
+                            if ((flagsToSet & flagBit) != 0) { // Only change if flag is currently set
+                                flagsToSet &= ~flagBit; // Remove the bit
+                                DLL_LOG_INFO("    Removing flag: " << flagName);
+                                flagsChanged = true;
+                            } else {
+                                DLL_LOG_INFO("    Flag " << flagName << " already removed.");
+                            }
+                        } else { // Add flag
+                            if ((flagsToSet & flagBit) == 0) { // Only change if flag is not currently set
+                                flagsToSet |= flagBit; // Add the bit
+                                DLL_LOG_INFO("    Adding flag: " << flagName);
+                                flagsChanged = true;
+                            } else {
+                                DLL_LOG_INFO("    Flag " << flagName << " already set.");
+                            }
+                        }
+                    } else {
+                        // Warning already logged by GetFlagBitFromString
+                    }
+                } // End loop through JSON flags array
+
+                // If flags were actually changed, attempt to set them
+                if (flagsChanged) {
+                    DLL_LOG_INFO("  Attempting to set flags for '" << cvarName << "' to 0x" << std::hex << flagsToSet << std::dec);
+                    if (g_pCVarManager->setFlags(cvarName, flagsToSet)) {
+                        DLL_LOG_INFO("    Successfully set flags for '" << cvarName << "'.");
+                        flagsModifiedCount++;
+                    } else {
+                        // Error already logged by setFlags
+                        // DLL_LOG_ERROR("    Failed to set flags for '" << cvarName << "'.");
+                        flagsFailedCount++;
+                    }
+                } else {
+                     DLL_LOG_INFO("  No effective flag changes specified for '" << cvarName << "'.");
+                }
+            } // End else (current flags read successfully)
+        } // End if (contains flags array)
+
         std::this_thread::sleep_for(std::chrono::milliseconds(5)); // Short delay
     } // End CVar processing loop
 
     // --- Step 6: Report Summary ---
     PrintToConsole("\n--- JSON Load Summary ---");
-    DLL_LOG_INFO("Processed " << jsonData.size() << " entries.");
-    DLL_LOG_INFO("Successfully set: " << successCount);
-    DLL_LOG_INFO("Failed to set:    " << failureCount);
-    DLL_LOG_INFO("Skipped entries:  " << skippedCount);
+    DLL_LOG_INFO("Processed " << jsonData.size() << " entries from JSON.");
+    DLL_LOG_INFO("Value Set Success:  " << successCount); // Renamed for clarity
+    DLL_LOG_INFO("Value Set Failures: " << failureCount); // Renamed for clarity
+    DLL_LOG_INFO("Flags Modified:     " << flagsModifiedCount); // New count
+    DLL_LOG_INFO("Flag Set Failures:  " << flagsFailedCount); // New count
+    DLL_LOG_INFO("Skipped Entries:    " << skippedCount);
     PrintToConsole("-------------------------");
 
     ShowHotkeyMenu(); // Show menu after completion
