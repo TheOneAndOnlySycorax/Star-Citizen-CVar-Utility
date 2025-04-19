@@ -1380,8 +1380,11 @@ void HandleLoadCVarsFromJson() {
     char mbFilePath[MAX_PATH] = { 0 }; // For logging
     WideCharToMultiByte(CP_UTF8, 0, wFilePath.c_str(), -1, mbFilePath, MAX_PATH, NULL, NULL);
     DLL_LOG_INFO("User selected file: " << mbFilePath);
-
-     std::ifstream jsonFile(wstring_to_utf8(wFilePath)); // Convert from wide path to UTF-8
+#if defined(_MSC_VER)    
+    std::ifstream jsonFile(wFilePath);
+#elif defined(__GNUC__) 
+    std::ifstream jsonFile(wstring_to_utf8(wFilePath)); // Convert from wide path to UTF-8
+#endif
     if (!jsonFile.is_open()) {
         DLL_LOG_ERROR("Failed to open file: " << mbFilePath);
         ShowHotkeyMenu();

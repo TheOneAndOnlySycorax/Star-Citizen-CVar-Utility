@@ -114,6 +114,10 @@ static std::string FormatCVarManagerLogMessage(const std::string& prefix, const 
 
 _NODISCARD bool SafeReadPointer(uintptr_t address, void** outValue) {
     if (!outValue) return false;
+#if defined(_MSC_VER) 
+    __try { *outValue = *reinterpret_cast<void**>(address); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { *outValue = nullptr; return false; }
+#elif defined(__GNUC__)
     if (!address) { *outValue = nullptr; return false; }
     
     // Use IsBadReadPtr as a safer alternative to SEH for MinGW
@@ -124,10 +128,15 @@ _NODISCARD bool SafeReadPointer(uintptr_t address, void** outValue) {
     
     *outValue = *reinterpret_cast<void**>(address);
     return true;
+#endif
 }
 
 _NODISCARD bool SafeReadUIntPtr(uintptr_t address, uintptr_t* outValue) {
     if (!outValue) return false;
+#if defined(_MSC_VER)     
+    __try { *outValue = *reinterpret_cast<uintptr_t*>(address); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { *outValue = 0; return false; }
+#elif defined(__GNUC__)
     if (!address) { *outValue = 0; return false; }
     
     // Use IsBadReadPtr as a safer alternative to SEH for MinGW
@@ -135,12 +144,23 @@ _NODISCARD bool SafeReadUIntPtr(uintptr_t address, uintptr_t* outValue) {
         *outValue = 0;
         return false;
     }
-    
+        
     *outValue = *reinterpret_cast<uintptr_t*>(address);
     return true;
+#endif
 }
 
 _NODISCARD bool SafeCallFindCVar(FindCVarFn pFn, void* pMgr, const char* szName, void** outPIcvar) {
+#if defined(_MSC_VER)    
+    if (!outPIcvar) return false;
+    __try {
+        *outPIcvar = pFn(pMgr, szName);
+        // Basic sanity check on the returned pointer
+        if (!*outPIcvar || reinterpret_cast<uintptr_t>(*outPIcvar) < 0x10000) *outPIcvar = nullptr;
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) { *outPIcvar = nullptr; return false; }
+#elif defined(__GNUC__)
     if (!outPIcvar || !pFn || !pMgr || !szName) {
         if (outPIcvar) *outPIcvar = nullptr;
         return false;
@@ -156,9 +176,15 @@ _NODISCARD bool SafeCallFindCVar(FindCVarFn pFn, void* pMgr, const char* szName,
     }
     
     return true;
+#endif
 }
 
 _NODISCARD bool SafeCallGetStringValue(GetStringValueFn pFn, void* pICVar, const char** outValue) {
+#if defined(_MSC_VER)    
+    if (!outValue) return false;
+    __try { *outValue = pFn(pICVar); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { *outValue = nullptr; return false; }
+#elif defined(__GNUC__)
     if (!outValue || !pFn || !pICVar) {
         if (outValue) *outValue = nullptr;
         return false;
@@ -167,9 +193,15 @@ _NODISCARD bool SafeCallGetStringValue(GetStringValueFn pFn, void* pICVar, const
     // Direct call - can't really protect this in MinGW without SEH
     *outValue = pFn(pICVar);
     return true;
+#endif
 }
 
 _NODISCARD bool SafeCallGetName(GetNameFn pFn, void* pICVar, const char** outValue) {
+#if defined(_MSC_VER)
+    if (!outValue) return false;
+    __try { *outValue = pFn(pICVar); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { *outValue = 0; return false; }
+#elif defined(__GNUC__)    
     if (!outValue || !pFn || !pICVar) {
         if (outValue) *outValue = nullptr;
         return false;
@@ -178,9 +210,15 @@ _NODISCARD bool SafeCallGetName(GetNameFn pFn, void* pICVar, const char** outVal
     // Direct call - can't really protect this in MinGW without SEH
     *outValue = pFn(pICVar);
     return true;
+#endif
 }
 
 _NODISCARD bool SafeCallGetFlags(GetFlagsFn pFn, void* pICVar, DWORD* outValue) {
+#if defined(_MSC_VER)    
+    if (!outValue) return false;
+    __try { *outValue = pFn(pICVar); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { *outValue = 0; return false; }
+#elif defined(__GNUC__) 
     if (!outValue || !pFn || !pICVar) {
         if (outValue) *outValue = 0;
         return false;
@@ -189,9 +227,14 @@ _NODISCARD bool SafeCallGetFlags(GetFlagsFn pFn, void* pICVar, DWORD* outValue) 
     // Direct call - can't really protect this in MinGW without SEH
     *outValue = pFn(pICVar);
     return true;
+#endif
 }
 
 _NODISCARD bool SafeCallSetStringValue(SetStringValueFn pFn, void* pICVar, const char* szValue) {
+#if defined(_MSC_VER)   
+    __try { pFn(pICVar, szValue); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+#elif defined(__GNUC__) 
     if (!pFn || !pICVar || !szValue) {
         return false;
     }
@@ -199,9 +242,14 @@ _NODISCARD bool SafeCallSetStringValue(SetStringValueFn pFn, void* pICVar, const
     // Direct call - can't really protect this in MinGW without SEH
     pFn(pICVar, szValue);
     return true;
+#endif
 }
 
 _NODISCARD bool SafeCallSetFlags(SetFlagsFn pFn, void* pICVar, DWORD flags) {
+#if defined(_MSC_VER)    
+    __try { pFn(pICVar, flags); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+#elif defined(__GNUC__) 
     if (!pFn || !pICVar) {
         return false;
     }
@@ -209,9 +257,15 @@ _NODISCARD bool SafeCallSetFlags(SetFlagsFn pFn, void* pICVar, DWORD flags) {
     // Direct call - can't really protect this in MinGW without SEH
     pFn(pICVar, flags);
     return true;
+#endif
 }
 
 _NODISCARD bool SafeCallEnumCVars(EnumCVarsFn pFn, void* pMgr, const char** pNameListBuffer, QWORD bufferCount, QWORD* outActualCount) {
+#if defined(_MSC_VER)    
+     if (!outActualCount) return false;
+    __try { *outActualCount = pFn(pMgr, pNameListBuffer, bufferCount, nullptr); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { *outActualCount = 0; return false; }
+#elif defined(__GNUC__) 
     if (!outActualCount || !pFn || !pMgr) {
         if (outActualCount) *outActualCount = 0;
         return false;
@@ -220,6 +274,7 @@ _NODISCARD bool SafeCallEnumCVars(EnumCVarsFn pFn, void* pMgr, const char** pNam
     // Direct call - can't really protect this in MinGW without SEH
     *outActualCount = pFn(pMgr, pNameListBuffer, bufferCount, nullptr);
     return true;
+#endif
 }
 
 // --- CVarManager Implementation ---
@@ -262,11 +317,15 @@ bool CVarManager::isValidCodePointer(uintptr_t ptr) {
 
     // Attempt to get module info for a more precise check
     // Initialize all fields to avoid missing initializer warnings
+#if defined(_MSC_VER)    
+    MODULEINFO modInfo = { 0 };
+#elif defined(__GNUC__) 
     MODULEINFO modInfo = { 
         NULL,                // lpBaseOfDll
         0,                   // SizeOfImage
         NULL                 // EntryPoint
     };
+#endif
     HMODULE hModule = GetModuleHandleA(m_moduleName.c_str()); // Use stored module name
     if (hModule && GetModuleInformation(GetCurrentProcess(), hModule, &modInfo, sizeof(modInfo))) {
         uintptr_t moduleEnd = m_baseAddr + modInfo.SizeOfImage;
