@@ -54,6 +54,10 @@
 #include <cstdio>         // C Standard Input/Output library (needed for _wsplitpath_s)
 #include <cstdlib>        // C Standard Library (needed for _MAX_DRIVE, _MAX_DIR used by _wsplitpath_s)
 
+#include <sstream>   // For string splitting
+#include <algorithm> // For trimming helpers
+
+
 // --- Linker Directives ---
 // Link necessary Windows libraries directly in the source code for convenience.
 #pragma comment(lib, "Shlwapi.lib") // For PathCombineW, PathFindFileNameW etc.
@@ -67,8 +71,7 @@ const wchar_t* RSI_LAUNCHER_EXE = L"RSI Launcher.exe";              // RSI Launc
 const wchar_t* LOGIN_DATA_FILE = L"loginData.json";                 // Login data file created by game/launcher
 const wchar_t* LOGIN_DATA_BACKUP_FILE = L"loginData_backup.json";   // Backup file used for direct launch persistence
 const wchar_t* GAME_LOG_FILE = L"Game.log";                         // Game log file to monitor for login status
-const wchar_t* MINHOOK_DLL_DEFAULT = L"minhook.x64.dll";            // Default name/relative path of the MinHook DLL (dependency)
-const wchar_t* MAIN_DLL_DEFAULT = L"dllmain.dll";                   // Default name/relative path of the primary user DLL to inject
+const wchar_t* MAIN_DLL_DEFAULT = L"dllmain.dll";                   // Default name/relative path of the primary DLL to inject
 const wchar_t* DEFAULT_LAUNCHER_DIR = L"C:\\Program Files\\Roberts Space Industries\\RSI Launcher";  // Default RSI Launcher installation directory
 const wchar_t* DEFAULT_GAME_DIR = L"C:\\Program Files\\Roberts Space Industries\\StarCitizen\\LIVE"; // Default Star Citizen LIVE installation directory
 const wchar_t* DEFAULT_GAME_ARGS =                                  // Default command-line arguments for launching StarCitizen.exe directly
@@ -83,6 +86,54 @@ const wchar_t* EAC_BYPASS_VAR = L"EOS_USE_ANTICHEATCLIENTNULL";
 std::atomic<bool> g_loginFailed(false); // Atomic boolean flag. Set to true by MonitorLogFile if a login error is detected. Read by the main thread.
 
 // --- Helper Functions ---
+
+// --- String Helper Functions ---
+static inline std::wstring& ltrim(std::wstring& s, const wchar_t* t = L" \t\n\r\f\v\"") {
+    s.erase(0, s.find_first_not_of(t));
+    return s;
+}
+static inline std::wstring& rtrim(std::wstring& s, const wchar_t* t = L" \t\n\r\f\v\"") {
+    s.erase(s.find_last_not_of(t) + 1);
+    return s;
+}
+static inline std::wstring& trim(std::wstring& s, const wchar_t* t = L" \t\n\r\f\v\"") {
+    return ltrim(rtrim(s, t), t);
+}
+std::vector<std::wstring> split_and_trim(const std::wstring& s, wchar_t delimiter) {
+    std::vector<std::wstring> tokens;
+    std::wstring token;
+    std::wstringstream tokenStream(s);
+    while (std::getline(tokenStream, token, delimiter)) {
+        std::wstring trimmed_token = trim(token);
+        if (!trimmed_token.empty()) {
+            tokens.push_back(trimmed_token);
+        }
+    }
+    return tokens;
+}
+
+// Helper to trim leading/trailing whitespace and quotes from a wstring
+static inline std::wstring trim_quotes_and_space(const std::wstring& s) {
+    size_t first = s.find_first_not_of(L" \t\n\r\f\v\"");
+    if (std::wstring::npos == first) {
+        return s; // String is all whitespace/quotes or empty
+    }
+    size_t last = s.find_last_not_of(L" \t\n\r\f\v\"");
+    return s.substr(first, (last - first + 1));
+}
+
+// Helper to replace all occurrences of a substring
+static inline void replace_all(std::wstring& str, const std::wstring& from, const std::wstring& to) {
+    if (from.empty())
+        return;
+    size_t start_pos = 0;
+    while ((start_pos = str.find(from, start_pos)) != std::wstring::npos) {
+        str.replace(start_pos, from.length(), to);
+        start_pos += to.length(); // In case 'to' contains 'from', like replacing 'x' with 'yx'
+    }
+}
+
+// --- End String Helper Functions ---
 
 /**
  * @brief Combines two path components into a single path string using the Windows API function PathCombineW.
@@ -373,13 +424,13 @@ bool LaunchProcessWithArgs(const std::wstring& exePath, const std::wstring& args
 
         // Open the NUL device for Standard Input (Child will read from NUL)
         hNulInput = CreateFileW(
-            L"NUL",                           // Special device name
-            GENERIC_READ,                     // Read access
+            L"NUL",                             // Special device name
+            GENERIC_READ,                       // Read access
             FILE_SHARE_READ | FILE_SHARE_WRITE, // Allow sharing
-            &sa,                              // Make handle inheritable
-            OPEN_EXISTING,                    // NUL always exists
-            0,                                // Default attributes
-            NULL                              // No template file
+            &sa,                                // Make handle inheritable
+            OPEN_EXISTING,                      // NUL always exists
+            0,                                  // Default attributes
+            NULL                                // No template file
         );
         if (hNulInput == INVALID_HANDLE_VALUE) {
             std::wcerr << L"[ERROR] Failed to open NUL device for input redirection. Error: " << GetLastError() << std::endl;
@@ -499,7 +550,7 @@ bool RunElevated(const std::wstring& command, const std::wstring& args, bool wai
     // Attempt to execute the command with elevation
     if (ShellExecuteExW(&sei)) {
         // ShellExecuteExW succeeded in initiating the launch
-        std::wcout << L"[INFO] Launched elevated process: " << GetFileName(command) << L" " << args << std::endl;
+        //std::wcout << L"[INFO] Launched elevated process: " << GetFileName(command) << L" " << args << std::endl;
 
         // Handle waiting logic based on the 'wait' parameter and whether a valid handle was returned
         if (wait && sei.hProcess != NULL) {
@@ -507,7 +558,7 @@ bool RunElevated(const std::wstring& command, const std::wstring& args, bool wai
             WaitForSingleObject(sei.hProcess, INFINITE);
             // Close the process handle now that we're done waiting
             CloseHandle(sei.hProcess);
-            std::wcout << L"[INFO] Elevated process finished." << std::endl;
+          //  std::wcout << L"[INFO] Elevated process finished." << std::endl;
         }
         else if (!wait && sei.hProcess != NULL) {
             // If not waiting, we still need to close the handle we received
@@ -634,7 +685,7 @@ bool InjectDLL(DWORD pid, const std::wstring& dllPath) {
     // Wait indefinitely for the remote thread (which is executing LoadLibraryW) to finish.
     WaitForSingleObject(hThread, INFINITE);
     std::wstring dllFilename = GetFileName(dllPath); // Get filename for logging
-    std::wcout << L"[INFO] Injection thread finished for: " << dllFilename << std::endl;
+    //std::wcout << L"[INFO] Injection thread finished for: " << dllFilename << std::endl;
 
     // --- Step 7: Check the Result of LoadLibraryW via Thread Exit Code ---
     DWORD exitCode = 0; // Variable to store the remote thread's exit code
@@ -654,7 +705,7 @@ bool InjectDLL(DWORD pid, const std::wstring& dllPath) {
     if (exitCode == 0) {
         // LoadLibraryW failed within the remote thread.
         std::wcerr << L"[ERROR] LoadLibraryW failed in the remote process for " << dllFilename << L" (Remote Thread ExitCode=0)." << std::endl;
-        std::wcerr << L"        Check DLL dependencies (use Dependencies GUI or similar), architecture (must be x64), and ensure DllMain returns TRUE." << std::endl;
+        std::wcerr << L"        Check DLL dependencies, architecture (must be x64), and ensure DllMain returns TRUE." << std::endl;
         return false; // Indicate injection failure
     }
     else {
@@ -730,7 +781,7 @@ DWORD GetProcessID(const wchar_t* procName) {
  * @param gamePid The Process ID (PID) of the game process (`StarCitizen.exe`) being monitored.
  */
 void MonitorLogFile(std::wstring logFilePath, DWORD gamePid) {
-    std::wcout << L"[INFO] Monitoring log file: " << logFilePath << std::endl;
+    std::wcout << L"\n[INFO] Monitoring log file: " << logFilePath << std::endl;
 
     // Define the specific log messages that indicate login failure
     std::vector<std::string> errorStrings = {
@@ -823,11 +874,11 @@ void MonitorLogFile(std::wstring logFilePath, DWORD gamePid) {
                         // Use string::find for efficient substring search
                         if (line.find(errorStr) != std::string::npos) {
                             // *** FAILURE DETECTED ***
-                            std::wcerr << L"\n[ALERT] Detected login failure string in log!" << std::endl;
+                            std::wcerr << L"[ALERT] Detected login failure string in log!" << std::endl;
                             std::cerr << "        \"" << line << "\"" << std::endl; // Print the matching line
                             g_loginFailed = true; // Set the global atomic flag
                             logStream.close();    // Close the file stream
-                            std::wcout << L"[INFO] Log monitor stopping (detected error)." << std::endl;
+                            std::wcout << L"[INFO] Log monitor stopping." << std::endl;
                             return; // Exit the MonitorLogFile function immediately
                         }
                     } // End error string check loop
@@ -836,11 +887,11 @@ void MonitorLogFile(std::wstring logFilePath, DWORD gamePid) {
                     for (const auto& successStr : successStrings) {
                         if (line.find(successStr) != std::string::npos) {
                             // *** SUCCESS DETECTED ***
-                            std::wcout << L"\n[INFO] Detected login success string in log." << std::endl;
+                            std::wcout << L"[INFO] Detected login success string in log." << std::endl;
                             std::cout << "        \"" << line << "\"" << std::endl; // Print the matching line
                             // IMPORTANT: Do *not* set g_loginFailed flag
                             logStream.close(); // Close the file stream
-                            std::wcout << L"[INFO] Log monitor stopping (detected success)." << std::endl;
+                            std::wcout << L"[INFO] Log monitor stopping." << std::endl;
                             return; // Exit the MonitorLogFile function gracefully
                         }
                     } // End success string check loop
@@ -891,13 +942,195 @@ void MonitorLogFile(std::wstring logFilePath, DWORD gamePid) {
 
         // Wait for a short duration before the next check cycle
         std::this_thread::sleep_for(std::chrono::seconds(3));
-    } // End while(gameProcessExists)
+    }
 
     // If the loop exited because the game process terminated normally (not due to detected error/success),
     // ensure the global failure flag is reset.
     g_loginFailed = false;
 }
 
+
+//UNUSED
+/**
+ * @brief Parses `build_manifest.id` to extract Tag, Branch, and P4 Change Number.
+ * @param manifestPath The full path to the `build_manifest.id` file.
+ * @param outTag [out] Reference to store the extracted "Tag" value.
+ * @param outBranch [out] Reference to store the extracted "Branch" value.
+ * @param outP4ChangeNum [out] Reference to store the extracted "RequestedP4ChangeNum" value.
+ * @return `true` if the file was parsed successfully and all keys found, `false` otherwise.
+ *         Logs warnings on failure and success details on success.
+ */
+bool parse_build_manifest(const std::wstring& manifestPath,
+    std::wstring& outTag,
+    std::wstring& outBranch,
+    std::wstring& outP4ChangeNum)
+{
+    std::wifstream manifestFile(manifestPath);
+    if (!manifestFile.is_open()) {
+        //std::wcerr << L"[WARN] Could not open build manifest file: " << manifestPath << std::endl;
+        return false;
+    }
+
+    std::wstring line;
+    bool tagFound = false, branchFound = false, p4Found = false;
+
+    // Simple line-by-line parsing looking for specific keys
+    while (std::getline(manifestFile, line)) {
+        size_t colonPos = line.find(L':');
+        if (colonPos == std::wstring::npos) continue; // Skip lines without a colon
+
+        std::wstring key = line.substr(0, colonPos);
+        std::wstring value = line.substr(colonPos + 1);
+
+        // Trim key and value
+        key = trim_quotes_and_space(key);
+        value = trim_quotes_and_space(value);
+        // Remove trailing comma if present
+        if (!value.empty() && value.back() == L',') {
+            value.pop_back();
+        }
+        value = trim_quotes_and_space(value); // Trim again after removing comma
+
+        if (key == L"Tag" && !value.empty()) {
+            outTag = value;
+            tagFound = true;
+        }
+        else if (key == L"Branch" && !value.empty()) {
+            outBranch = value;
+            branchFound = true;
+        }
+        else if (key == L"RequestedP4ChangeNum" && !value.empty()) {
+            outP4ChangeNum = value;
+            p4Found = true;
+        }
+
+        if (tagFound && branchFound && p4Found) {
+            break; // Found all required values
+        }
+    }
+
+    manifestFile.close();
+
+    if (!tagFound || !branchFound || !p4Found) {
+        //std::wcerr << L"[WARN] Failed to find all required keys (Tag, Branch, RequestedP4ChangeNum) in " << manifestPath << std::endl;
+        return false;
+    }
+
+    //std::wcout << L"[INFO] Successfully parsed build manifest:" << std::endl;
+    //std::wcout << L"        Tag: " << outTag << std::endl;
+    //std::wcout << L"        Branch: " << outBranch << std::endl;
+    //std::wcout << L"        P4ChangeNum: " << outP4ChangeNum << std::endl;
+    return true;
+}
+
+//UNUSED
+/**
+ * @brief Constructs Star Citizen command-line arguments based on manifest data.
+ *        Formats `--system-trace-env-id` and `--grpc-client-endpoint-override`.
+ * @param tag The build tag from the manifest (e.g., L"public").
+ * @param branch The branch name from the manifest (e.g., L"sc-alpha-4.1.0").
+ * @param p4ChangeNum The P4 change number from the manifest (e.g., L"9687209").
+ * @return A `std::wstring` containing the constructed command-line argument string.
+ *         Logs the constructed identifier and final arguments.
+ */
+std::wstring construct_game_args_from_manifest(const std::wstring& tag, const std::wstring& branch, const std::wstring& p4ChangeNum) {
+    // --- Apply transformations ---
+    std::wstring processedTag = tag;
+    // Convert "public" to "pub", lowercase others for consistency?
+    // Simple case for now based on example:
+    if (processedTag == L"public") {
+        processedTag = L"pub";
+    }
+    else {
+        // Lowercase other tags if needed, or handle specific cases
+        std::transform(processedTag.begin(), processedTag.end(), processedTag.begin(), ::towlower);
+    }
+
+
+    std::wstring processedBranch = branch;
+    // Remove dots from branch: "sc-alpha-4.1.0" -> "sc-alpha-410"
+    replace_all(processedBranch, L".", L"");
+
+    // P4 Change number usually used as is
+    std::wstring processedP4 = p4ChangeNum;
+
+    // --- Construct the identifier ---
+    std::wstring identifier = processedTag + L"-" + processedBranch + L"-" + processedP4;
+    //std::wcout << L"[INFO] Constructed identifier: " << identifier << std::endl;
+
+    // --- Build the argument string ---
+    // Base arguments that seem constant
+    std::wstring baseArgs = L"-no_login_dialog -envtag PUB --client-login-show-dialog 0 --services-config-enabled 1 --system-trace-service-enabled 1 "; // Note trailing space
+
+    // Dynamic arguments
+    std::wstring systemTraceArg = L"--system-trace-env-id " + identifier;
+    std::wstring grpcEndpointArg = L"--grpc-client-endpoint-override https://" + identifier + L".test1.cloudimperiumgames.com:443"; // Assuming domain structure
+
+    std::wstring finalArgs = baseArgs + systemTraceArg + L" " + grpcEndpointArg;
+
+    //std::wcout << L"[INFO] Constructed game arguments based on manifest." << std::endl;
+    return finalArgs;
+}
+
+/**
+ * @brief Parses `settings.json` to extract the command-line parameters string.
+ * @param settingsPath The full path to the `settings.json` file.
+ * @param outParams [out] Reference to store the extracted parameters string value.
+ * @return `true` if the file was parsed successfully and the "parameters" key found, `false` otherwise.
+ *         Logs warnings on failure and success details on success.
+ */
+bool parse_settings_json(const std::wstring& settingsPath, std::wstring& outParams) {
+    std::wifstream settingsFile(settingsPath);
+    if (!settingsFile.is_open()) {
+        std::wcerr << L"[WARN] Could not open settings file: " << settingsPath << std::endl;
+        return false;
+    }
+
+    std::wstring line;
+    bool paramsFound = false;
+    const std::wstring paramKey = L"\"parameters\""; // Search for the key including quotes
+
+    while (std::getline(settingsFile, line)) {
+        size_t keyPos = line.find(paramKey);
+        if (keyPos != std::wstring::npos) {
+            // Found the key, now find the colon after it
+            size_t colonPos = line.find(L':', keyPos + paramKey.length());
+            if (colonPos != std::wstring::npos) {
+                // Extract the value part after the colon
+                std::wstring valuePart = line.substr(colonPos + 1);
+
+                // Trim whitespace, quotes, and trailing comma if present
+                valuePart = trim_quotes_and_space(valuePart); // Use existing helper
+                if (!valuePart.empty() && valuePart.back() == L',') {
+                    valuePart.pop_back();
+                }
+                valuePart = trim_quotes_and_space(valuePart); // Trim again
+
+                if (!valuePart.empty()) {
+                    outParams = valuePart;
+                    paramsFound = true;
+                    break; // Found what we needed
+                }
+                else {
+                    std::wcerr << L"[WARN] Found \"parameters\" key in " << settingsPath << L" but the value appears empty after trimming." << std::endl;
+                    // Continue searching just in case, though unlikely format
+                }
+            }
+        }
+    }
+
+    settingsFile.close();
+
+    if (!paramsFound) {
+        std::wcerr << L"[WARN] Failed to find \"parameters\" key in " << settingsPath << std::endl;
+        return false;
+    }
+
+    std::wcout << L"[INFO] Successfully parsed \"parameters\" from settings file." << std::endl;
+    // Optional: Log extracted params for debugging
+    // std::wcout << L"        Parameters: " << outParams << std::endl;
+    return true;
+}
 
 /**
  * @brief Forcefully terminates a process using its Process ID (PID) via TerminateProcess.
@@ -971,7 +1204,7 @@ bool TerminateProcessByPid(DWORD pid, const std::wstring& processNameHint) {
  * @return `true` if setting attempts were initiated successfully, `false` otherwise.
  */
 bool SetEnvironmentVariables() {
-    std::wcout << L"[INFO] Setting environment variable " << EAC_BYPASS_VAR << L"=1 (requires elevation)..." << std::endl;
+    std::wcout << L"[INFO] Setting environment variable for EAC bypass (requires elevation): \"" << EAC_BYPASS_VAR << L"=1\"" << std::endl;
 
     // Set system-wide persistent variable using setx. Waits for completion.
     std::wstring setxArgs = L"/M ";
@@ -991,7 +1224,7 @@ bool SetEnvironmentVariables() {
         // Don't necessarily fail the whole operation for local failure if system one worked, but log it.
     }
 
-    std::wcout << L"[INFO] Environment variable setting initiated." << std::endl;
+    std::wcout << L"[INFO] Environment variable set." << std::endl;
     return true;
 }
 
@@ -1001,10 +1234,9 @@ bool SetEnvironmentVariables() {
  * @param forInjectorExit If true, indicates this is the final cleanup before the injector exits.
  */
 void CleanupEnvironmentVariables(bool forInjectorExit = false) {
-    if (forInjectorExit) {
-        std::wcout << L"\n--- Final Cleanup ---" << std::endl;
-    }
-    std::wcout << L"[INFO] Cleaning up environment variable " << EAC_BYPASS_VAR << L" (requires elevation)..." << std::endl;
+     std::wcout << L"\n--- Final Cleanup ---" << std::endl;
+    
+    std::wcout << L"[INFO] Cleaning up environment variable (requires elevation): " << EAC_BYPASS_VAR << std::endl;
 
     // Attempt to unset/clear the system variable using setx first. Waits for completion.
     std::wstring setxArgs = L"/M ";
@@ -1019,7 +1251,7 @@ void CleanupEnvironmentVariables(bool forInjectorExit = false) {
     SetEnvironmentVariableW(EAC_BYPASS_VAR, nullptr);
 
     if (forInjectorExit) {
-        std::wcout << L"[INFO] Final environment variable cleanup complete." << std::endl;
+        std::wcout << L"[INFO] Environment variable cleanup complete." << std::endl;
     }
     else {
         std::wcout << L"[INFO] Environment variable cleanup performed." << std::endl;
@@ -1037,7 +1269,7 @@ void ShowHelp() {
     std::wcout << L"    1. Direct Launch: If a '" << LOGIN_DATA_BACKUP_FILE << L"' exists, it restores\n";
     std::wcout << L"       this data and automatically launches " << GAME_PROCESS_NAME << L" directly.\n";
     std::wcout << L"       'In this mode, it monitors '" << GAME_LOG_FILE << L"' for login failures and\n";
-    std::wcout << L"        will restart using the RSI Launcher if a failure is detected.\n";
+    std::wcout << L"        will restart using the RSI Launcher if a failure is detected.\n\n";
     std::wcout << L"    2. Via RSI Launcher: If no backup of login data exists, it starts '" << RSI_LAUNCHER_EXE << L"',\n";
     std::wcout << L"       waits for the user to launch the game via the launcher, injects DLLs,\n";
     std::wcout << L"       attempts to create '" << LOGIN_DATA_BACKUP_FILE << L"', and closes the launcher.\n";
@@ -1045,7 +1277,7 @@ void ShowHelp() {
     
     std::wcout << L"  Why dose this program need to backup 'loginData.json'?:\n";
     std::wcout << L"    Star Citizen requires 'loginData.json' to run and automatically deletes it on exit.\n"; 
-    std::wcout << L"    So by creating a backup of this file, it ensures that there has valid data to restore\n";
+    std::wcout << L"    So by creating a backup of this file, it ensures that there is valid data to restore\n";
     std::wcout << L"    whenever this program automatically launches the game.\n\n";
 
 
@@ -1056,38 +1288,40 @@ void ShowHelp() {
     std::wcout << L"  -h, --help\n";
     std::wcout << L"      Show this help message and exit.\n\n";
 
+    std::wcout << L"  -i, --inject <list>\n";
+    std::wcout << L"      Specifies a comma separated list of DLL paths to inject (relative or absolute).\n";
+    std::wcout << L"      Paths with spaces might need internal quotes depending on the shell." << std::endl;
+    std::wcout << L"      Example: --inject \"Test.dll, ../MyMod/Mod.dll, C:/Other/Tool.dll\"" << std::endl;
+    std::wcout << L"      Default: \"" << MAIN_DLL_DEFAULT << L"\"\n\n";
+
     std::wcout << L"  --gameDir <path>\n";
-    std::wcout << L"      Specify the path to the Star Citizen installation directory\n";
+    std::wcout << L"      Specifies the path to the Star Citizen installation directory\n";
     std::wcout << L"      (e.g., \"C:\\Program Files\\Roberts Space Industries\\StarCitizen\\LIVE\").\n";
     std::wcout << L"      Default: \"" << DEFAULT_GAME_DIR << L"\"\n\n";
 
     std::wcout << L"  --launcherDir <path>\n";
-    std::wcout << L"      Specify the path to the RSI Launcher installation directory.\n";
+    std::wcout << L"      Specifies the path to the RSI Launcher installation directory.\n";
     std::wcout << L"      Default: \"" << DEFAULT_LAUNCHER_DIR << L"\"\n\n";
 
-    std::wcout << L"  --minhookPath <path>\n";
-    std::wcout << L"      Specify the path (relative or absolute) to the MinHook DLL (e.g., minhook.x64.dll).\n";
-    std::wcout << L"      This is typically required by the main DLL.\n";
-    std::wcout << L"      Default: \"" << MINHOOK_DLL_DEFAULT << L"\"\n\n";
-
-    std::wcout << L"  --mainDLLPath <path>\n";
-    std::wcout << L"      Specify the path (relative or absolute) to the primary DLL to inject (e.g., MyMod.dll).\n";
-    std::wcout << L"      Default: \"" << MAIN_DLL_DEFAULT << L"\"\n\n";
-
     std::wcout << L"  --gameArgs \"<arguments>\"\n";
-    std::wcout << L"      Specify the command-line arguments to use when launching " << GAME_PROCESS_NAME << L" directly.\n";
-    std::wcout << L"      Enclose the entire argument string in double quotes if it contains spaces.\n";
-    std::wcout << L"      Default: (A long string including -no_login_dialog, etc.)\n";
-    std::wcout << L"               \"" << DEFAULT_GAME_ARGS << L"\"\n\n";
+    std::wcout << L"      Specifies Star Citizen's command-line arguments to use when launching the game directly.\n";
+    std::wcout << L"      Enclose the entire argument string in double quotes.\n";
+    std::wcout << L"      If this option is not used, the program will attempt to automatically determine\n"; // Added auto-detect info
+    std::wcout << L"      the correct arguments by parsing 'Settings.json' in the game's EastAntiCheat directory.\n";
+    std::wcout << L"      If the automatic procedure fails, it will fall back to the internal default:\n"; // Added fallback info
+    std::wcout << L"            \"" << DEFAULT_GAME_ARGS << L"\"\n\n";
 
     std::wcout << L"Example:\n";
-    std::wcout << L"  Injector.exe --gameDir \"D:\\Games\\StarCitizen\\LIVE\" --mainDLLPath \"MyOverlay.dll\"\n\n";
+    std::wcout << L"  Injector.exe --gameDir \"D:\\Games\\StarCitizen\\LIVE\" --inject \"MyOverlay.dll\"\n\n";
 }
 
 
 
-// --- Main Program Entry Point ---
 
+
+
+
+// --- Main Program Entry Point ---
 /**
  * @brief Main function for the Star Citizen Injector/Launcher.
  *        Handles command line arguments, determines launch mode (Direct or Launcher),
@@ -1100,8 +1334,8 @@ void ShowHelp() {
  */
 int wmain(int argc, wchar_t* argv[]) {
     // Print program header
-    std::wcout << L"=== Star Citizen Injector/Launcher v0.2 by Sycorax ===\n" << std::endl;
-
+    std::wcout << L"=== Star Citizen Injector/Launcher v0.2 by Sycorax ===" << std::endl;
+    std::wcout << L"Use -h or --help for command line options\n" << std::endl;
     // --- Help Option Check ---
     // Check for -h or --help *before* parsing other arguments or doing work.
     for (int i = 1; i < argc; ++i) {
@@ -1111,28 +1345,148 @@ int wmain(int argc, wchar_t* argv[]) {
         }
     }
     // Display help hint if no help flag was provided
-    std::wcout << L"    (Use -h or --help for command line options)\n" << std::endl;
+    
 
     // --- Argument Parsing & Path Setup ---
-    // Parse command line arguments using the helper function
-    std::map<std::wstring, std::wstring> args = parse_args(argc, argv);
+    // Manually parse critical arguments to check for duplicates and required values
+    std::wstring injectArgValue = L"";
+    std::wstring gameDirValue = L"";
+    std::wstring launcherDirValue = L"";
+    std::wstring gameArgsValue = L"";
 
-    // Determine paths based on arguments provided or use defaults
-    std::wstring gameDirArg = args.count(L"--gameDir") ? args[L"--gameDir"] : DEFAULT_GAME_DIR;
-    std::wstring launcherDirArg = args.count(L"--launcherDir") ? args[L"--launcherDir"] : DEFAULT_LAUNCHER_DIR;
-    std::wstring minhookRel = args.count(L"--minhookPath") ? args[L"--minhookPath"] : MINHOOK_DLL_DEFAULT;
-    std::wstring dllRel = args.count(L"--mainDLLPath") ? args[L"--mainDLLPath"] : MAIN_DLL_DEFAULT;
-    std::wstring gameArgs = args.count(L"--gameArgs") ? args[L"--gameArgs"] : DEFAULT_GAME_ARGS;
+    bool injectFlagFound = false;
+    bool gameDirFlagFound = false;
+    bool launcherDirFlagFound = false;
+    bool gameArgsFlagFound = false;
 
-    // Resolve all potentially relative paths to their absolute forms for reliability
+    for (int i = 1; i < argc; ++i) {
+        std::wstring currentArg = argv[i];
+
+        // Helper lambda to check for duplicate flags and get the value
+        // Added 'isInjectArg' boolean parameter for special handling
+        auto parse_single_arg = [&](const std::wstring& flagShort, const std::wstring& flagLong,
+            bool& flagFound, std::wstring& valueStore, bool isInjectArg) -> bool // Added isInjectArg
+            {
+                if (currentArg == flagShort || currentArg == flagLong) {
+                    // --- Duplicate Check ---
+                    if (flagFound) {
+                        std::wcerr << L"[FATAL] Argument " << currentArg << L" can only be specified once." << std::endl;
+                        ShowHelp();
+                        return false; // Indicate fatal error
+                    }
+                    flagFound = true;
+
+                    // --- Value Presence Check ---
+                    // Check if there is a next argument AND it doesn't start with '-'
+                    bool valueProvided = (i + 1 < argc && argv[i + 1][0] != L'-');
+
+                    if (valueProvided) {
+                        // A potential value exists next
+                        valueStore = argv[i + 1];
+
+                        // *** Conditional Empty Value Check ***
+                        // Check for empty value ONLY if it's NOT the inject argument
+                        if (!isInjectArg && valueStore.empty()) {
+                            std::wcerr << L"[FATAL] Argument " << currentArg << L" cannot have an empty value." << std::endl;
+                            ShowHelp();
+                            return false;
+                        }
+                        // If it IS the inject argument, we accept an empty value (e.g., --inject "")
+
+                        i++; // Consume the value argument
+                        return true; // Success, flag and value processed
+                    }
+                    else {
+                        // No value provided (either last argument or next starts with '-')
+
+                        // *** Conditional Required Value Check ***
+                        // Check if a value was required ONLY if it's NOT the inject argument
+                        if (!isInjectArg) {
+                            std::wcerr << L"[FATAL] Argument " << currentArg << L" requires a value." << std::endl;
+                            ShowHelp();
+                            return false; // Indicate fatal error for non-inject args
+                        }
+                        // If it IS the inject argument, it's okay if no value follows.
+                        // valueStore will remain empty (or its default), which the later logic handles.
+                        return true; // Success, flag processed, value was optional/absent
+                    }
+                }
+                return true; // Argument didn't match this flag, continue checking others
+            }; // End of lambda definition
+
+        // Parse arguments using the lambda, passing 'true' for isInjectArg only for -i/--inject
+        if (!parse_single_arg(L"-i", L"--inject", injectFlagFound, injectArgValue, true)) return 1;
+        if (!parse_single_arg(L"", L"--gameDir", gameDirFlagFound, gameDirValue, false)) return 1;
+        if (!parse_single_arg(L"", L"--launcherDir", launcherDirFlagFound, launcherDirValue, false)) return 1;
+        if (!parse_single_arg(L"", L"--gameArgs", gameArgsFlagFound, gameArgsValue, false)) return 1;
+
+        // You could add checks for other arguments here if needed
+        // else if (currentArg starts with '-') { /* Handle unknown arguments? */ }
+
+    } // End argument parsing loop
+
+    // Determine final values, using defaults if flags weren't found
+    std::wstring gameDirArg = gameDirFlagFound ? gameDirValue : DEFAULT_GAME_DIR;
+    std::wstring launcherDirArg = launcherDirFlagFound ? launcherDirValue : DEFAULT_LAUNCHER_DIR;
+    std::wstring gameArgs = gameArgsFlagFound ? gameArgsValue : DEFAULT_GAME_ARGS; // Renamed to avoid conflict
+
+    std::vector<std::wstring> injectDllsRel;
+
+    if (injectFlagFound) {
+        // Flag WAS provided, use the comma-separated value from CLI
+        if (injectArgValue.empty()) { // Should be caught by parser, but double-check
+            std::wcout << L"[INFO] Internal error: -i/--inject flag found but value is empty. Using default DLL: " << MAIN_DLL_DEFAULT << std::endl;
+            injectDllsRel.push_back(MAIN_DLL_DEFAULT);
+        }
+        // Split the value obtained from the command line
+        injectDllsRel = split_and_trim(injectArgValue, L',');
+        if (injectDllsRel.empty()) {
+            // Splitting resulted in nothing valid
+            std::wcout << L"[INFO] No valid DLL paths found after parsing list. Using default DLL: " << MAIN_DLL_DEFAULT << std::endl;
+            injectDllsRel.push_back(MAIN_DLL_DEFAULT);
+        }
+
+    }
+    else {
+            std::wcout << L"[INFO] No -i/--inject argument provided. Using default DLL: " << MAIN_DLL_DEFAULT << std::endl;
+            // Add the *single* default path directly to the vector
+            injectDllsRel.push_back(MAIN_DLL_DEFAULT);
+    }
+
+    // Check if we actually have any DLLs to inject *now*
+    if (injectDllsRel.empty()) {
+        std::wcout << L"[INFO] No DLLs configured for injection. Using default DLL: " << MAIN_DLL_DEFAULT << std::endl;
+        injectDllsRel.push_back(MAIN_DLL_DEFAULT);
+    }    
+
+    // Resolve Inject DLLs
+    std::vector<std::wstring> injectDllsAbs;
+    bool allInjectDllsResolved = true;
+    for (const auto& relPath : injectDllsRel) {
+        std::wstring absPath = get_absolute_path(relPath);
+        if (absPath.empty()) {
+            std::wcerr << L"[FATAL] Could not resolve DLL path to absolute path: " << relPath << std::endl;
+            allInjectDllsResolved = false;
+        }
+        else {
+            injectDllsAbs.push_back(absPath);
+        }
+    }
+    if (!allInjectDllsResolved) {
+        std::wcerr << L"Please check -i/--inject arguments and file locations." << std::endl;
+        return 1; // Exit if any DLL path resolution failed
+    }
+
+    // Resolve all relative paths to their absolute forms
     std::wstring gameDir = get_absolute_path(gameDirArg);
     std::wstring launcherDir = get_absolute_path(launcherDirArg);
-    std::wstring minhookAbs = get_absolute_path(minhookRel);
-    std::wstring dllAbs = get_absolute_path(dllRel);
 
-    // Validate that all essential paths could be resolved; exit if not
-    if (gameDir.empty() || launcherDir.empty() || minhookAbs.empty() || dllAbs.empty()) {
-        std::wcerr << L"[FATAL] Could not resolve one or more required paths. Check arguments/locations." << std::endl;
+    // Validate that base paths could be resolved; exit if not
+    if (gameDir.empty() || launcherDir.empty()) {
+        std::wcerr << L"[FATAL] Could not resolve one or more required base paths:" << std::endl;
+        if (gameDir.empty()) std::wcerr << L"  - Game directory resolution failed: " << gameDirArg << std::endl;
+        if (launcherDir.empty()) std::wcerr << L"  - Launcher directory resolution failed: " << launcherDirArg << std::endl;
+        std::wcerr << L"Please check arguments and file/directory locations." << std::endl;
         return 1; // Indicate critical failure
     }
 
@@ -1143,20 +1497,69 @@ int wmain(int argc, wchar_t* argv[]) {
     std::wstring loginBackupPath = JoinPath(gameDir, LOGIN_DATA_BACKUP_FILE);     // Full path to loginData_backup.json
     std::wstring gameLogPath = JoinPath(gameDir, GAME_LOG_FILE);                  // Full path to Game.log
     std::wstring rsiLauncherPath = JoinPath(launcherDir, RSI_LAUNCHER_EXE);       // Full path to RSI Launcher.exe
+    //std::wstring buildManifestPath = JoinPath(gameDir, L"build_manifest.id");   // Currently unused
+    std::wstring gameEACDir = JoinPath(gameDir, L"EasyAntiCheat");                        // Game's Easy Anti Cheat directory
+    std::wstring settingsJsonPath = JoinPath(gameEACDir, L"Settings.json");
 
     // --- Pre-flight Checks ---
-    // Verify the existence of crucial directories and files before entering the main loop.
     if (!directory_exists(gameDir)) { std::wcerr << L"[FATAL] Game directory not found: " << gameDir << std::endl; return 1; }
+    if (!file_exists(exePath)) { std::wcerr << L"[FATAL] Game executable not found: " << exePath << std::endl; return 1; }
     if (!directory_exists(launcherDir)) { std::wcerr << L"[FATAL] Launcher directory not found: " << launcherDir << std::endl; return 1; }
-    if (!file_exists(minhookAbs)) { std::wcerr << L"[FATAL] MinHook DLL not found: " << minhookAbs << std::endl; return 1; }
-    if (!file_exists(dllAbs)) { std::wcerr << L"[FATAL] Main DLL not found: " << dllAbs << std::endl; return 1; }
+    if (!file_exists(rsiLauncherPath)) { std::wcerr << L"[FATAL] RSI Launcher executable not found: " << rsiLauncherPath << std::endl; return 1; }
+
+    // Validate Inject DLLs existence
+    bool allInjectDllsExist = true;
+    for (const auto& absPath : injectDllsAbs) {
+        if (!file_exists(absPath)) {
+            std::wcerr << L"[FATAL] Specified DLL not found: " << absPath << std::endl;
+            allInjectDllsExist = false;
+        }
+    }
+    if (!allInjectDllsExist) {
+        std::wcerr << L"Please check -i/--inject arguments and file locations." << std::endl;
+        return 1;
+    }
+
+    // Validate other essential file existence
     if (!file_exists(exePath)) { std::wcerr << L"[FATAL] Game executable not found: " << exePath << std::endl; return 1; }
     if (!file_exists(rsiLauncherPath)) { std::wcerr << L"[FATAL] RSI Launcher executable not found: " << rsiLauncherPath << std::endl; return 1; }
 
+    // --- Dynamic Game Argument Construction ---
+    std::wcout << L"\n--- Game Argument Configuration ---" << std::endl;
+    // Check if the user *didn't* specify custom arguments
+    if (!gameArgsFlagFound) {
+        // Attempt to parse the manifest
+        //std::wcout << L"[INFO] --gameArgs not specified. Attempting to read build manifest file in game directory..." << std::endl;
+
+        //std::wstring manifestTag, manifestBranch, manifestP4;
+        //if (parse_build_manifest(buildManifestPath, manifestTag, manifestBranch, manifestP4)) {
+        // gameArgs = construct_game_args_from_manifest(manifestTag, manifestBranch, manifestP4);
+        // std::wcout << L"[INFO] Using dynamically constructed game arguments." << std::endl;
+        
+        //Attempt to parse EAC settings file
+        std::wcout << L"[INFO] --gameArgs not specified." << std::endl;
+        std::wcout << L"[INFO] Attempting to parse Settings.json file in the game's EasyAntiCheat directory to get game arguments..." << std::endl;
+        std::wstring extractedParams;
+        if (parse_settings_json(settingsJsonPath, extractedParams)) {
+            gameArgs = extractedParams;
+            std::wcout << L"[INFO] Using arguments from settings file." << std::endl;
+        }
+        else {
+            // Parsing failed or file not found, use the hardcoded default
+            std::wcout << L"[WARN] Failed to get arguments from settings file. Using default values." << std::endl;
+        }
+        std::wcout << L"[INFO] Final Game Args: " << gameArgs << std::endl;
+    }
+    else {
+        // User specified arguments, respect their choice
+        std::wcout << L"[INFO] Using game arguments provided via --gameArgs." << std::endl;
+    }
+    
     // --- Main Application Loop ---
     // This loop allows the entire process (launch/detect, inject, monitor) to be restarted.
     // The primary reason for restarting is if a direct launch fails due to login issues,
     // requiring a run through the RSI Launcher path to get fresh login data.
+    std::wcout << L"\n--- Initalization ---" << std::endl;
     while (true) {
         // --- Reset State Variables for Current Iteration ---
         g_loginFailed = false;              // Reset the login failure flag detected by the monitor thread
@@ -1166,7 +1569,7 @@ int wmain(int argc, wchar_t* argv[]) {
         ZeroMemory(&piGame, sizeof(piGame)); // Ensure handles start NULL
         std::thread logMonitorThread;       // Thread object for log monitoring (created only if needed)
         bool launchedDirectly = false;      // Flag indicating if this iteration uses the direct launch path
-        bool injectionFullySucceeded = false;// Flag tracking if both DLLs were injected successfully this iteration
+        bool injectionFullySucceeded = false;// Flag tracking if DLLs were injected successfully this iteration
         bool backupCreatedThisRun = false;  // Flag indicating if backup was made during an RSI Launcher run this iteration
         bool envVarsSetThisRun = false;     // Track if env vars were set for this run (for cleanup logic)
 
@@ -1213,7 +1616,9 @@ int wmain(int argc, wchar_t* argv[]) {
                 }
 
                 // Launch StarCitizen.exe, giving it its own console window.
-                std::wcout << L"[INFO] Launching " << GetFileName(exePath) << L" with arguments..." << std::endl;
+                if (gameArgsFlagFound) {
+                    std::wcout << L"[INFO] Launching " << GetFileName(exePath) << L" with arguments..." << std::endl;
+                }
                 if (!LaunchProcessWithArgs(exePath, gameArgs, piGame, gameBin64Dir, true)) { // true = new console
                     std::wcerr << L"[ERROR] Failed to launch game executable directly." << std::endl;
                     // Clean up the potentially corrupted login data we just copied.
@@ -1225,8 +1630,8 @@ int wmain(int argc, wchar_t* argv[]) {
                 gamePid = piGame.dwProcessId;
 
                 // Wait briefly after launch to allow the process to initialize somewhat before injection.
-                std::wcout << L"[INFO] Waiting briefly after direct launch..." << std::endl;
-                std::this_thread::sleep_for(std::chrono::seconds(8));
+                //std::wcout << L"[INFO] Waiting briefly after launch..." << std::endl;
+                //std::this_thread::sleep_for(std::chrono::seconds(8));
             }
             // Proceed to Phase 2 (Injection) after this block. gamePid should now be valid.
 
@@ -1259,9 +1664,11 @@ int wmain(int argc, wchar_t* argv[]) {
             // The user needs to interact with the RSI Launcher GUI, log in, and press the "Launch Game" button.
             std::wcout << L"\n[ACTION REQUIRED] Please log in via the RSI Launcher and launch Star Citizen." << std::endl;
             std::wcout << L"                 Waiting for '" << GAME_PROCESS_NAME << L"' process to appear (Timeout approx. 10 minutes)..." << std::endl;
+
             gamePid = 0; // Reset game PID for polling
             int wait_cycles = 0;
             const int max_wait_cycles = 300; // Approx. 10 minutes (300 cycles * 2 seconds/cycle)
+
             while (gamePid == 0 && wait_cycles < max_wait_cycles) {
                 gamePid = GetProcessID(GAME_PROCESS_NAME); // Check if the game process exists now
                 if (gamePid == 0) {
@@ -1298,71 +1705,93 @@ int wmain(int argc, wchar_t* argv[]) {
         } // End Mode Selection (if/else)
 
 
-        // --- Phase 2: Inject DLLs ---
-        // This phase executes if gamePid was successfully obtained in Phase 1 (from either launch path).
+         // --- Phase 2: Inject DLLs ---
+         // This phase executes if gamePid was successfully obtained in Phase 1 (from either launch path).
         if (gamePid != 0) {
             // Perform a final check: Is the game process *still* running right before we inject?
             DWORD exitCodeCheckInject = STILL_ACTIVE;
-            HANDLE hCheckInject = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, gamePid);
+            // Request necessary permissions for injection
+            HANDLE hCheckInject = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ | PROCESS_CREATE_THREAD, FALSE, gamePid);
+
             if (hCheckInject != NULL && GetExitCodeProcess(hCheckInject, &exitCodeCheckInject) && exitCodeCheckInject == STILL_ACTIVE) {
                 // Process is confirmed active, close the check handle and proceed with injection.
+                // Note: We reuse hCheckInject for the actual injection if needed, or reopen with necessary rights in InjectDLL.
+                // For simplicity here, let InjectDLL handle opening its own handle. Close the check handle.
                 if (hCheckInject) CloseHandle(hCheckInject);
+                hCheckInject = NULL; // Avoid double close later
 
                 // === Perform Injection ===
                 std::wcout << L"\n--- DLL Injection ---" << std::endl;
-                std::wcout << L"[INFO] Waiting briefly before injection..." << std::endl;
-                // Wait a few seconds to let the game process initialize further before injecting.
-                std::this_thread::sleep_for(std::chrono::seconds(5));
-                std::wcout << L"[INFO] Injecting required DLLs into game process PID: " << gamePid << std::endl;
 
-                // Inject the first DLL (MinHook dependency)
-                bool minhookInjected = InjectDLL(gamePid, minhookAbs);
-                bool mainDllInjected = false;
-                // Only attempt to inject the main DLL if the first one succeeded
-                if (minhookInjected) {
-                    mainDllInjected = InjectDLL(gamePid, dllAbs);
+                // Optional: Wait a few seconds to let the game process initialize further before injecting.
+                // std::wcout << L"[INFO] Waiting briefly before injection..." << std::endl;
+                // std::this_thread::sleep_for(std::chrono::seconds(5));
+
+                std::wcout << L"[INFO] Injecting specified DLLs into game process PID: " << gamePid << std::endl;
+
+                bool allDllsInjected = true; // Assume success until a failure occurs
+
+                // --- Inject Specified DLLs (in order) ---
+                for (const auto& dllPath : injectDllsAbs) {
+                    //std::wcout << L"       - Injecting: " << dllPath << std::endl;
+                    if (!InjectDLL(gamePid, dllPath)) {
+                        std::wcerr << L"[ERROR] Failed to inject DLL: " << dllPath << std::endl;
+                        allDllsInjected = false; // Mark overall failure
+                        // Optionally: break here if one failure should stop subsequent injections
+                        // break;
+                    }
+                    //else {
+                    //    std::wcout << L"       - Successfully injected: " << dllPath << std::endl;
+                    //}
+                    // Optional: Short delay between injections if needed by DLLs
+                   // std::this_thread::sleep_for(std::chrono::seconds(1)); // Short delay example
                 }
 
-                // Check if both injections were successful
-                if (minhookInjected && mainDllInjected) {
-                    injectionFullySucceeded = true; // Set flag indicating success
+                // Determine overall injection success
+                injectionFullySucceeded = allDllsInjected;
+
+                // Check if all required injections were successful
+                if (injectionFullySucceeded) {
+                    std::wcout << L"[SUCCESS] All specified DLLs injected successfully." << std::endl;
                 }
-                else {
+                else { // <<<< START OF BLOCK WHERE ERROR OCCURRED >>>>
                     // Handle injection failure
-                    std::wcerr << L"[ERROR] One or more DLL injections failed." << std::endl;
+                    std::wcerr << L"[ERROR] One or more required DLL injections failed." << std::endl;
+
                     // Terminate the game process *only* if we launched it directly this run
                     if (launchedDirectly && piGame.hProcess) {
-                        std::wcerr << L"        Terminating the directly launched game process due to injection failure." << std::endl;
+                        std::wcerr << L"        Terminating the launched game process due to injection failure." << std::endl;
                         TerminateProcessByPid(gamePid, GAME_PROCESS_NAME);
                     }
                     else {
-                        // If launched via RSI or found already running, don't kill it on injection failure
                         std::wcerr << L"        Game process was launched via RSI Launcher or already running; not terminating it." << std::endl;
                         std::wcerr << L"        Manual intervention may be required to close the game." << std::endl;
                     }
 
-                    // --- Cleanup after failed injection ---
-                    // If this happened during the RSI Launcher path, ensure launcher is closed.
+                    // Ensure launcher is closed if it was used this run and injection failed
                     if (!launchedDirectly && launcherPid != 0) {
-                        TerminateProcessByPid(launcherPid, RSI_LAUNCHER_EXE); // Ensure launcher is closed
+                        TerminateProcessByPid(launcherPid, RSI_LAUNCHER_EXE);
                     }
-                    // Close game process handles if we created them during direct launch
+                    // Close game handles if we created them
                     if (piGame.hProcess) CloseHandle(piGame.hProcess);
                     if (piGame.hThread) CloseHandle(piGame.hThread);
-                    // Clean up environment variables before exiting
+                    clear_or_delete_file(loginDataPath);
+                    // Clean up env vars before exiting
                     if (envVarsSetThisRun) CleanupEnvironmentVariables(false);
-                    return 1; // Exit the program with an error code due to injection failure
+                    return 1; // Exit due to injection failure
+
                 }
             }
             else {
                 // Game process died between launch/detection and this injection attempt.
                 std::wcerr << L"[ERROR] Game process (PID: " << gamePid << ") exited or became inaccessible before injection could occur." << std::endl;
-                if (hCheckInject) CloseHandle(hCheckInject); // Close the check handle
+                if (hCheckInject) CloseHandle(hCheckInject); // Close the check handle if it was opened
                 // Clean up our direct launch handles if they exist
                 if (piGame.hProcess) CloseHandle(piGame.hProcess);
                 if (piGame.hThread) CloseHandle(piGame.hThread);
                 // Clean up launcher path resources if necessary
                 if (!launchedDirectly && launcherPid != 0) TerminateProcessByPid(launcherPid, RSI_LAUNCHER_EXE);
+                clear_or_delete_file(loginDataPath);
                 // Clean up environment variables before exiting
                 if (envVarsSetThisRun) CleanupEnvironmentVariables(false);
                 return 1; // Exit because game didn't stay running long enough
@@ -1374,6 +1803,7 @@ int wmain(int argc, wchar_t* argv[]) {
             // Attempt cleanup just in case handles were somehow set
             if (piGame.hProcess) CloseHandle(piGame.hProcess);
             if (piGame.hThread) CloseHandle(piGame.hThread);
+            clear_or_delete_file(loginDataPath);
             // Clean up env vars if they were set
             if (envVarsSetThisRun) CleanupEnvironmentVariables(false);
             return 1;
@@ -1395,6 +1825,7 @@ int wmain(int argc, wchar_t* argv[]) {
                 std::wcout << L"[INFO] Found " << LOGIN_DATA_FILE << ". Attempting backup..." << std::endl;
                 if (copy_file(loginDataPath, loginBackupPath)) {
                     backupCreatedThisRun = true; // Set flag indicating backup was successful this run
+                    std::wcout << L"[INFO] Backup created successfully: " << loginBackupPath << std::endl;
                 }
                 else {
                     std::wcerr << L"[WARN] Failed to backup login data file. Check permissions/disk space." << std::endl;
@@ -1402,8 +1833,8 @@ int wmain(int argc, wchar_t* argv[]) {
                 }
             }
             else {
-                std::wcerr << L"[WARN] " << LOGIN_DATA_FILE << " not found after injection and waiting. Cannot create backup." << std::endl;
                 // Continue without backup.
+                std::wcerr << L"[WARN] " << LOGIN_DATA_FILE << " not found after injection and waiting. Cannot create backup." << std::endl;
             }
 
             // 4. Terminate the RSI Launcher process now that the game is running and backup attempted.
@@ -1422,12 +1853,11 @@ int wmain(int argc, wchar_t* argv[]) {
             else {
                 std::wcout << L"[INFO] Completed Launcher Mode tasks, including login data backup creation." << std::endl;
             }
-            std::wcout << L"--- Launcher Tasks Complete ---" << std::endl;
         } // End post-injection launcher tasks
 
 
-        // --- Phase 4: Monitoring & Waiting ---
-        // This phase runs if the game process is valid (gamePid != 0) AND injection fully succeeded.
+            // --- Phase 4: Monitoring & Waiting ---
+            // This phase runs if the game process is valid (gamePid != 0) AND injection fully succeeded.
         if (gamePid != 0 && injectionFullySucceeded) {
             std::wcout << L"\n--- Game Monitoring & Waiting ---" << std::endl;
 
@@ -1451,6 +1881,7 @@ int wmain(int argc, wchar_t* argv[]) {
                         std::wcerr << L"[ERROR] Failed to create log monitor thread!" << std::endl;
                         // If monitor fails, terminate game if we launched it, then clean up and exit program
                         if (piGame.hProcess) TerminateProcessByPid(gamePid, GAME_PROCESS_NAME);
+                        clear_or_delete_file(loginDataPath);
                         if (envVarsSetThisRun) CleanupEnvironmentVariables(false); // Clean up before exit
                         return 1;
                     }
@@ -1462,6 +1893,7 @@ int wmain(int argc, wchar_t* argv[]) {
                     // Clean up our direct launch handles if necessary
                     if (piGame.hProcess) CloseHandle(piGame.hProcess);
                     if (piGame.hThread) CloseHandle(piGame.hThread);
+                    clear_or_delete_file(loginDataPath);
                     // Clean up environment variables before exiting
                     if (envVarsSetThisRun) CleanupEnvironmentVariables(false);
                     return 1; // Exit as game isn't running
@@ -1475,7 +1907,7 @@ int wmain(int argc, wchar_t* argv[]) {
             // --- Main Wait Loop ---
             // Waits here until either the game process exits OR (if monitoring) a login failure is detected.
             std::wcout << L"[INFO] Waiting for game process (PID: " << gamePid << ") to exit..." << std::endl;
-            std::wcout << L"       Close this window manually when done, or wait for the game to close." << std::endl;
+            std::wcout << L"       You may close this program manually if done, or wait for the game to close." << std::endl;
             while (true) {
                 // === Check 1: Login Failure (only in Direct Launch mode) ===
                 if (launchedDirectly && g_loginFailed) {
@@ -1522,20 +1954,21 @@ int wmain(int argc, wchar_t* argv[]) {
             // Cleanup just in case
             if (piGame.hProcess) CloseHandle(piGame.hProcess);
             if (piGame.hThread) CloseHandle(piGame.hThread);
+            clear_or_delete_file(loginDataPath);
             if (envVarsSetThisRun) CleanupEnvironmentVariables(false); // Clean up env vars
             return 1;
         }
 
+        // Delete the current loginData.json file. This ensures that if the backup exists,
+        // the next run will use the direct launch path. If backup doesn't exist, this has no effect.
+        std::wcout << L"[INFO] Deleting current login data file (if exists): " << loginDataPath << std::endl;
+        clear_or_delete_file(loginDataPath);
 
         // --- Phase 5: Post-Game Exit Cleanup ---
         // This code executes after the main wait loop breaks, meaning the game process has terminated normally.
         // Perform final cleanup actions before the injector program exits.
         if (envVarsSetThisRun) CleanupEnvironmentVariables(true); // Perform FINAL cleanup (only if they were set this run)
 
-        // Delete the current loginData.json file. This ensures that if the backup exists,
-        // the next run will use the direct launch path. If backup doesn't exist, this has no effect.
-        std::wcout << L"[INFO] Deleting current login data file (if exists): " << loginDataPath << std::endl;
-        clear_or_delete_file(loginDataPath);
 
         // Clean up game process handles IF we were the ones who launched it directly in this iteration.
         // Closing NULL handles is safe.
@@ -1565,6 +1998,6 @@ int wmain(int argc, wchar_t* argv[]) {
 
     } // End while(true) - Main Application Loop
 
-    // This point should technically not be reached due to exit conditions within the loop.
+        // This point should technically not be reached due to exit conditions within the loop.
     return 0;
 }
