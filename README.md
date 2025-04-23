@@ -7,14 +7,14 @@
 This project provides the source code for a DLL to interact with Star Citizen's CVar system in-game, along with an injector application (`Injector.exe`) that manages automatic launching of the game and injecting DLLs into it's process.
 
 
-*   **Injector (`Injector.exe`):**    
+* **Injector (`Injector.exe`):**    
     
     *Handles the controlled launch sequence of Star Citizen, along with the subsequent loading of the Minhook and CVar Utility DLL into the game process. This tool is not required to inject the DLLs as any basic injector can be used.*
 
-    *   Launches Star Citizen directly (using backed-up login data) or via the RSI Launcher.
-    *   Manages `loginData.json` backup/restore for automatically launching `StarCitizen.exe`, bypassing the RSI Launcher.
-    *   Automatically injects `dllmain.dll` and `minhook.x64.dll` upon game start.
-    *   Handles potential login failures in direct launch mode by restarting via the launcher.
+    * Launches Star Citizen directly (using backed-up login data) or via the RSI Launcher.
+    * Manages `loginData.json` backup/restore for automatically launching `StarCitizen.exe`, bypassing the RSI Launcher.
+    * Automatically injects `dllmain.dll` and `minhook.x64.dll` upon game start.
+    * Handles potential login failures in direct launch mode by restarting via the launcher.
     
     *   Configurable paths via command-line arguments.
 
@@ -22,74 +22,86 @@ This project provides the source code for a DLL to interact with Star Citizen's 
     
     *Once loaded by an injector, this DLL provides the interactive console and functions for inspecting and modifying CVars during gameplay.*
     
-    *   Provides an interactive console window accessible via hotkeys.
+    * Provides an interactive console window accessible via hotkeys.
     
-    *   Get/Set CVar values and flags.
+    * Get/Set CVar values and flags.
     
-    *   Dumps CVars to console or file (Text/JSON).
+    * Dumps CVars to console or file (Text/JSON).
     
-    *   Load CVars into game from a JSON file.
+    * Load CVars into game from a JSON file.
 
 ## Prerequisites
 
-*   Windows 10/11 (x64)
+* Windows 10/11 or Linux
 
-*   Visual Studio 2022 with C++ Desktop Development workload.
+    * For Windows:
+        - Visual Studio 2022 with C++ Desktop Development workload.
+    * For Linux:
+        - See [Building](https://github.com/TheOneAndOnlySycorax/Star-Citizen-CVar-Utility#building) section
 
-*   Star Citizen installed.
+* Star Citizen installed.
+
+* Easy Anti Cheat bypassed
 
 ## Building
 
-1.  Clone the repository.
+- **Using Windows 10/11:**
+    * Clone the repository.
+    
+    * Open the `.sln` file in Visual Studio 2022.
+    
+    * Select `Release` and `x64` configuration.
+    
+    * Build the solution (`Build > Build Solution` or `Ctrl+Shift+B`). 
+    
+    * When done, the output files (`Injector.exe`, `dllmain.dll`, and `minhook.x64.dll` ) should be located in the `x64/Release/` directory.
 
-2.  Open the `.sln` file in Visual Studio 2022.
+- **Using Linux (Debian based):**
+    * ```bash
+      git clone https://github.com/TheOneAndOnlySycorax/Star-Citizen-CVar-Utility.git
+      cd Star-Citizen-CVar-Utility
+      apt-get update
+      apt-get install build-essential cmake gcc-mingw-w64 git ninja-build
+      make
+      ```
 
-3.  Select `Release` and `x64` configuration.
-
-4.  Build the solution (`Build > Build Solution` or `Ctrl+Shift+B`). 
-
-5.  When done, the output files (`Injector.exe`, `dllmain.dll`, and `minhook.x64.dll` ) should be located in the `x64/Release/` directory.
+    * **Ensure that `gcc-mingw-w64` is on version 14+**
 
 ## Injector Usage
-1.  Ensure `Injector.exe`, `dllmain.dll`, and `minhook.x64.dll` are in the same directory.
-
-2.  Run `Injector.exe`. It may request Administrator privileges for environment variable setup.
+*Note: The Injector may request Administrator privileges for setting global environment variables which are used for bypassing Easy Anti-Cheat. It is unknown how long this method will last. **Therefore, it is highly recommended that Easy Anti-Cheat is bypassed using a secondary method BEFORE using the Injector.***
 
 *   <details>
-    <summary>Command-Line Arguments (Optional)</summary>
+    <summary><b>Command-Line Interface</b></summary>
+    <i>Note: All CLI arguments are optional. Default values will be used for any argument not specified.</i>
 
     *   **`-h, --help`**
         *   Show the help message and exit.
     
-    *   **`--gameDir <path>`**
-        *   Specify the path to the Star Citizen installation directory
-    
-        *   (e.g., `"C:\Program Files\Roberts Space Industries\StarCitizen\LIVE"`).
-    
-    *   **`--launcherDir <path>`**
-        *   Specify the path to the RSI Launcher installation directory.
-    
-    *   **`--minhookPath <path>`**
-        *   Specify the path (relative or absolute) to the MinHook DLL (e.g., `minhook.x64.dll`).
-    
-        *   This is typically required by the main DLL.
-    
-    *   **`--mainDLLPath <path>`**
-        *   Specify the path (relative or absolute) to the primary DLL to inject (e.g., `MyMod.dll`).
-    
-    *   **`--gameArgs "<arguments>"`**
-        *   Specify the command-line arguments to use when launching `StarCitizen.exe` directly.
-        
-        *   Enclose the entire argument string in double quotes if it contains spaces.
+    *   **`-i, --inject <list>`**
+        * Specifies a comma separated list of DLL paths to inject (relative or absolute). Paths with spaces might need internal quotes depending on the shell. 
+        * If this is not provided then the default DLL path will be used (`./dllmain.dll`)
+        * Example: `--inject Test.dll,../MyMod/Mod.dll,C:/Other/Tool.dll`                
 
+    *   **`--gameDir <path>`**
+        * Specifies the path to the Star Citizen installation directory.
+        
+    *   **`--launcherDir <path>`**
+        *   Specifies the path to the RSI Launcher installation directory.
+    
+    *   **`--gameArgs "<arguments>"`** (Use only if you know what you are doing)
+        * Specifies Star Citizen's command-line arguments to use when launching the game directly. The entire argument string must be enclosed in double quotes. 
+        * If this option is not provided, the Injector will automatically determine the correct game arguments by parsing 'Settings.json' in the game's EastAntiCheat directory. This feature is useful for whenever the game is updated and it's version number changes.
+        * If the automatic procedure fails, the Injector will instead use predefined default values.
+        * ***You should only use this option if you know what you are doing, or if the automatic procedure fails AND the default values are outdated.***
+        
     * **Example:**
-        ```bash
-        Injector.exe --gameDir "D:\Games\StarCitizen\LIVE" --mainDLLPath "SC_CVar_Utility.dll"
-        ```
+            ```
+            Injector.exe --gameDir "D:\Games\StarCitizen\LIVE" --inject Test.dll"
+            ```
     </details>
 
 *   <details>
-    <summary>Launch Behavior</summary>
+    <summary><b>Launch Behavior</b></summary>
 
     *   **If `loginData_backup.json` is *not* found** in the game directory:
         *   The RSI Launcher will start.
@@ -108,7 +120,7 @@ This project provides the source code for a DLL to interact with Star Citizen's 
     </details>
 
 *   <details>
-    <summary>Why is `loginData_backup.json` needed?</summary>
+    <summary><b>Why is `loginData_backup.json` needed?</b></summary>
 
     *   `StarCitizen.exe` requires a valid `loginData.json` file in its directory to authenticate and launch successfully. However, the game automatically deletes `loginData.json` upon closing.
    
@@ -173,6 +185,7 @@ Once the DLL is injected, its console window will appear. You can interact with 
         ]
         ```
     </details>
+    
 ## Dependencies
 
 *   [MinHook](https://github.com/TsudaKageyu/minhook) (Included in `./libs/`)
