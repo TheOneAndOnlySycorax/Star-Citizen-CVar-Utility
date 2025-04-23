@@ -57,7 +57,6 @@
 #include <sstream>   // For string splitting
 #include <algorithm> // For trimming helpers
 
-
 // --- Linker Directives ---
 // Link necessary Windows libraries directly in the source code for convenience.
 #pragma comment(lib, "Shlwapi.lib") // For PathCombineW, PathFindFileNameW etc.
@@ -85,7 +84,6 @@ const wchar_t* EAC_BYPASS_VAR = L"EOS_USE_ANTICHEATCLIENTNULL";
 // Used for inter-thread communication regarding login status.
 std::atomic<bool> g_loginFailed(false); // Atomic boolean flag. Set to true by MonitorLogFile if a login error is detected. Read by the main thread.
 
-// --- Helper Functions ---
 
 // --- String Helper Functions ---
 static inline std::wstring& ltrim(std::wstring& s, const wchar_t* t = L" \t\n\r\f\v\"") {
@@ -112,6 +110,7 @@ std::vector<std::wstring> split_and_trim(const std::wstring& s, wchar_t delimite
     return tokens;
 }
 
+
 // Helper to trim leading/trailing whitespace and quotes from a wstring
 static inline std::wstring trim_quotes_and_space(const std::wstring& s) {
     size_t first = s.find_first_not_of(L" \t\n\r\f\v\"");
@@ -133,7 +132,6 @@ static inline void replace_all(std::wstring& str, const std::wstring& from, cons
     }
 }
 
-// --- End String Helper Functions ---
 
 /**
  * @brief Combines two path components into a single path string using the Windows API function PathCombineW.
@@ -160,6 +158,7 @@ std::wstring JoinPath(const std::wstring& p1, const std::wstring& p2) {
     return std::wstring(combinedPath);
 }
 
+
 /**
  * @brief Extracts the filename part (including extension) from a full path string.
  *        Uses the Windows API function PathFindFileNameW for reliable extraction.
@@ -172,6 +171,7 @@ std::wstring GetFileName(const std::wstring& path) {
     // Construct a new wstring from the pointer
     return std::wstring(filename);
 }
+
 
 /**
  * @brief Extracts the directory path (including drive letter, if present) from a full path string.
@@ -241,6 +241,7 @@ std::map<std::wstring, std::wstring> parse_args(int argc, wchar_t* argv[]) {
     return args; // Return the map of parsed arguments
 }
 
+
 /**
  * @brief Converts a potentially relative path into a fully qualified absolute path using GetFullPathNameW.
  * @param relativePath The input path string, which can be relative (e.g., "MinHook.dll") or absolute.
@@ -259,6 +260,7 @@ std::wstring get_absolute_path(const std::wstring& relativePath) {
     return std::wstring(buffer);
 }
 
+
 /**
  * @brief Checks if a file (and specifically not a directory) exists at the given path.
  * @param path The full path to the item to check.
@@ -271,6 +273,7 @@ bool file_exists(const std::wstring& path) {
     // AND check if the FILE_ATTRIBUTE_DIRECTORY flag is *not* set.
     return (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY));
 }
+
 
 /**
  * @brief Checks if a directory exists at the given path.
@@ -305,6 +308,7 @@ bool copy_file(const std::wstring& src, const std::wstring& dst) {
     return true; // Indicate success
 }
 
+
 /**
  * @brief Deletes the file specified by the path, if it exists and is actually a file (not a directory).
  *        Uses DeleteFileW. Logs warnings on failure, except for "file not found" errors during the delete attempt.
@@ -338,6 +342,7 @@ void clear_or_delete_file(const std::wstring& path) {
         // If file/path not found, no deletion is needed, and no message is logged (especially important for cleanup steps).
     }
 }
+
 
 /**
  * @brief Retrieves the size of a specified file using GetFileSizeEx.
@@ -509,6 +514,7 @@ bool LaunchProcessWithArgs(const std::wstring& exePath, const std::wstring& args
     return true;
 }
 
+
 /**
  * @brief Runs a specified command with elevated administrator privileges using ShellExecuteExW and the "runas" verb.
  *        This will typically trigger a User Account Control (UAC) prompt if elevation is required.
@@ -582,6 +588,7 @@ bool RunElevated(const std::wstring& command, const std::wstring& args, bool wai
         return false; // Indicate launch initiation failure
     }
 }
+
 
 /**
  * @brief Injects a specified DLL into a target process using the classic CreateRemoteThread technique.
@@ -715,6 +722,7 @@ bool InjectDLL(DWORD pid, const std::wstring& dllPath) {
     }
 }
 
+
 /**
  * @brief Finds the Process ID (PID) of the first running process that matches the provided executable name.
  *        Uses the ToolHelp32Snapshot API to enumerate processes. The comparison is case-insensitive.
@@ -763,6 +771,7 @@ DWORD GetProcessID(const wchar_t* procName) {
     // Return the found PID (will be 0 if no match was found)
     return pid;
 }
+
 
 /**
  * @brief Monitors the specified game log file for specific login failure or success strings in a separate thread.
@@ -1023,6 +1032,7 @@ bool parse_build_manifest(const std::wstring& manifestPath,
     return true;
 }
 
+
 //UNUSED
 /**
  * @brief Constructs Star Citizen command-line arguments based on manifest data.
@@ -1071,6 +1081,7 @@ std::wstring construct_game_args_from_manifest(const std::wstring& tag, const st
     //std::wcout << L"[INFO] Constructed game arguments based on manifest." << std::endl;
     return finalArgs;
 }
+
 
 /**
  * @brief Parses `settings.json` to extract the command-line parameters string.
@@ -1131,6 +1142,7 @@ bool parse_settings_json(const std::wstring& settingsPath, std::wstring& outPara
     // std::wcout << L"        Parameters: " << outParams << std::endl;
     return true;
 }
+
 
 /**
  * @brief Forcefully terminates a process using its Process ID (PID) via TerminateProcess.
@@ -1197,7 +1209,6 @@ bool TerminateProcessByPid(DWORD pid, const std::wstring& processNameHint) {
 
 
 // --- Environment Variable Management ---
-
 /**
  * @brief Sets the required environment variable for EAC bypass, both locally and persistently (system-wide).
  *        Requires elevation for system-wide changes.
@@ -1228,6 +1239,7 @@ bool SetEnvironmentVariables() {
     return true;
 }
 
+
 /**
  * @brief Cleans up the environment variables set for EAC bypass, both locally and persistently.
  *        Requires elevation for system-level changes.
@@ -1257,6 +1269,7 @@ void CleanupEnvironmentVariables(bool forInjectorExit = false) {
         std::wcout << L"[INFO] Environment variable cleanup performed." << std::endl;
     }
 }
+
 
 /**
  * @brief Displays the help message containing program description, usage, and options.
@@ -1314,11 +1327,6 @@ void ShowHelp() {
     std::wcout << L"Example:\n";
     std::wcout << L"  Injector.exe --gameDir \"D:\\Games\\StarCitizen\\LIVE\" --inject \"MyOverlay.dll\"\n\n";
 }
-
-
-
-
-
 
 
 // --- Main Program Entry Point ---

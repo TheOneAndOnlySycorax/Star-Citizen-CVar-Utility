@@ -4,7 +4,7 @@
 [![IDE](https://img.shields.io/badge/IDE-Visual%20Studio%202022-purple.svg)](https://visualstudio.microsoft.com/)
 
 ## Overview and Features
-This project provides the source code for a DLL to interact with Star Citizen's CVar system in-game, along with an injector application (`Injector.exe`) that manages automatic launching of the game and injecting DLLs into it's process.
+This project provides the source code for a DLL to interact with Star Citizen's CVar system, along with an injector application that manages automatic launching of the game and injection of DLLs into it's process.
 
 
 * **Injector (`Injector.exe`):**    
@@ -54,7 +54,9 @@ This project provides the source code for a DLL to interact with Star Citizen's 
     
     * Build the solution (`Build > Build Solution` or `Ctrl+Shift+B`). 
     
-    * When done, the output files (`Injector.exe`, `dllmain.dll`, and `minhook.x64.dll` ) should be located in the `x64/Release/` directory.
+    * When done, the output files (`Injector.exe`, `SC_CVar_Utility.dll`, and `minhook.x64.dll` ) should be located in the `x64/Release/` directory.
+
+    * Injection: `./Injector.exe --inject minhook.x64.dll,SC_CVar_Utility.dll`
 
 - **Using Linux (Debian based):**
     * ```bash
