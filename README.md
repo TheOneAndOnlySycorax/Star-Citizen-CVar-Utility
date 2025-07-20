@@ -6,6 +6,7 @@
 ## Overview and Features
 This project provides the source code for a DLL to interact with Star Citizen's CVar system, along with an injector application that manages automatic launching of the game and injection of DLLs into it's process.
 
+**Important: Due to widespread cheating in Star Citizen during the first half of 2025, CIG has activated the Easy Anti-Cheat Heartbeat feature. This significantly increases the difficulty of bypassing Easy Anti-Cheat, effectively preventing the core functionality this project. As a result, this project will no longer being maintained. Using this utility may put your account at risk of getting banned.** 
 
 * **Injector (`Injector.exe`):**    
     
